@@ -43,6 +43,8 @@ class ProcessScreen {
 
             this.app.showSuccess('Proceso iniciado correctamente');
             this.updateProcessStatus('running');
+            this.showTimer();
+            this.startTimer();
             
         } catch (error) {
             this.app.showError('Error iniciando el proceso');
@@ -58,8 +60,29 @@ class ProcessScreen {
             this.app.showSuccess('Proceso pausado');
             this.updateProcessStatus('paused');
             
+            // Pausar el timer pero mantenerlo visible
+            if (this.timer) {
+                clearInterval(this.timer);
+                this.timer = null;
+            }
+            
         } catch (error) {
             this.app.showError('Error pausando el proceso');
+        }
+    }
+
+    async resumeProcess() {
+        try {
+            await this.app.apiCall('/process/resume', {
+                method: 'POST'
+            });
+            
+            this.app.showSuccess('Proceso reanudado');
+            this.updateProcessStatus('running');
+            this.startTimer();
+            
+        } catch (error) {
+            this.app.showError('Error reanudando el proceso');
         }
     }
 
@@ -72,6 +95,8 @@ class ProcessScreen {
                 
                 this.app.showSuccess('Proceso detenido');
                 this.updateProcessStatus('stopped');
+                this.hideTimer();
+                this.stopTimer();
                 
             } catch (error) {
                 this.app.showError('Error deteniendo el proceso');
@@ -131,6 +156,67 @@ class ProcessScreen {
             'error': 'bg-danger'
         };
         return classes[status] || 'bg-secondary';
+    }
+
+    showTimer() {
+        const timerElement = document.getElementById('process-timer');
+        if (timerElement) {
+            // Configurar estilos para el cronómetro centrado
+            timerElement.style.display = 'flex';
+            timerElement.style.justifyContent = 'center';
+            timerElement.style.alignItems = 'center';
+            timerElement.style.position = 'fixed';
+            timerElement.style.top = '50%';
+            timerElement.style.left = '50%';
+            timerElement.style.transform = 'translate(-50%, -50%)';
+            timerElement.style.zIndex = '1000';
+            timerElement.style.background = 'rgba(0, 0, 0, 0.9)';
+            timerElement.style.color = 'white';
+            timerElement.style.padding = '2rem 3rem';
+            timerElement.style.borderRadius = '15px';
+            timerElement.style.fontSize = '2rem';
+            timerElement.style.fontWeight = 'bold';
+            timerElement.style.boxShadow = '0 10px 30px rgba(0, 0, 0, 0.5)';
+            timerElement.style.transition = 'all 0.3s ease';
+            
+            // Agregar clase para animaciones
+            timerElement.classList.add('timer-active');
+        }
+    }
+
+    hideTimer() {
+        const timerElement = document.getElementById('process-timer');
+        if (timerElement) {
+            timerElement.classList.remove('timer-active');
+            timerElement.style.display = 'none';
+        }
+    }
+
+    startTimer() {
+        this.startTime = Date.now();
+        this.timer = setInterval(() => {
+            const elapsed = Date.now() - this.startTime;
+            const hours = Math.floor(elapsed / 3600000);
+            const minutes = Math.floor((elapsed % 3600000) / 60000);
+            const seconds = Math.floor((elapsed % 60000) / 1000);
+            
+            const timerDisplay = document.getElementById('timer-display');
+            if (timerDisplay) {
+                timerDisplay.textContent = 
+                    `${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
+            }
+        }, 1000);
+    }
+
+    stopTimer() {
+        if (this.timer) {
+            clearInterval(this.timer);
+            this.timer = null;
+        }
+        const timerDisplay = document.getElementById('timer-display');
+        if (timerDisplay) {
+            timerDisplay.textContent = '00:00:00';
+        }
     }
 
     static getTemplate() {
@@ -204,7 +290,7 @@ class ProcessScreen {
                                         <div class="status-dot" id="status-dot"></div>
                                         <span class="status-text" id="status-text">Detenido</span>
                                     </div>
-                                    <div class="process-timer" id="process-timer">
+                                    <div class="process-timer" id="process-timer" style="display: none;">
                                         <i class="bi bi-clock me-2"></i>
                                         <span id="timer-display">00:00:00</span>
                                     </div>

@@ -62,11 +62,11 @@ module.exports = {
 
   // Configuración de logging
   logging: {
-    level: process.env.LOG_LEVEL || 'info',
+    level: process.env.LOG_LEVEL || 'error',
     file: 'silar-system.log',
     maxSize: '10m',
     maxFiles: 5,
-    console: true
+    console: false
   },
 
   // Configuración de procesos

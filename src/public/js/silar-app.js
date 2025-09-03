@@ -83,8 +83,6 @@ class SilarApp {
     }
 
     initDemoMode() {
-        console.log('🔧 Running in DEMO MODE - Simulating Arduino data');
-        
         // Simulate Arduino connection
         this.systemStatus.arduino = true;
         this.systemStatus.database = true;
@@ -206,7 +204,6 @@ class SilarApp {
     initSocket() {
         // Skip socket connection in demo mode
         if (this.isDemoMode) {
-            console.log('🔧 Demo mode: Skipping socket connection');
             return;
         }
         
@@ -221,12 +218,10 @@ class SilarApp {
             });
             
             this.socket.on('connect', () => {
-                console.log('✅ Conectado al servidor WebSocket');
                 this.updateSystemStatus({ websocket: true });
             });
 
             this.socket.on('disconnect', (reason) => {
-                console.log('❌ Desconectado del servidor:', reason);
                 this.updateSystemStatus({ websocket: false });
                 
                 if (!this.isDemoMode && reason !== 'io client disconnect') {
@@ -235,7 +230,6 @@ class SilarApp {
             });
 
             this.socket.on('connect_error', (error) => {
-                console.error('Error de conexión WebSocket:', error);
                 this.updateSystemStatus({ websocket: false });
                 
                 if (!this.isDemoMode) {
@@ -251,7 +245,6 @@ class SilarApp {
                 this.updateProcessData(data);
             });
         } catch (error) {
-            console.error('Error al inicializar Socket.IO:', error);
             this.updateSystemStatus({ websocket: false });
         }
     }

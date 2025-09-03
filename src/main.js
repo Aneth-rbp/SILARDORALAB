@@ -102,8 +102,6 @@ function checkServerStatus() {
 }
 
 function startServer() {
-  console.log('Iniciando servidor web...');
-  
   // Iniciar el servidor web como proceso hijo
   serverProcess = spawn('node', ['server.js'], {
     stdio: 'pipe',
@@ -111,15 +109,15 @@ function startServer() {
   });
 
   serverProcess.stdout.on('data', (data) => {
-    console.log('Servidor:', data.toString());
+    // Log silencioso del servidor
   });
 
   serverProcess.stderr.on('data', (data) => {
-    console.error('Error del servidor:', data.toString());
+    // Log silencioso de errores del servidor
   });
 
   serverProcess.on('close', (code) => {
-    console.log('Servidor cerrado con código:', code);
+    // Servidor cerrado
   });
 
   // Esperar un momento para que el servidor se inicie
@@ -269,13 +267,12 @@ app.on('window-all-closed', () => {
   }
 });
 
-// Cerrar el servidor cuando se cierre la aplicación
-app.on('before-quit', () => {
-  if (serverProcess) {
-    console.log('Cerrando servidor web...');
-    serverProcess.kill();
-  }
-});
+  // Cerrar el servidor cuando se cierre la aplicación
+  app.on('before-quit', () => {
+    if (serverProcess) {
+      serverProcess.kill();
+    }
+  });
 
 // Manejar eventos IPC
 ipcMain.handle('get-app-info', () => {

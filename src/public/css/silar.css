@@ -509,7 +509,7 @@ body {
 
 /* ===== NUEVO DASHBOARD ESTILIZADO ===== */
 .dashboard-container {
-    padding: 1.5rem !important;
+    padding: 1.2rem !important;
     max-width: 100vw !important;
     margin: 0 !important;
     width: 100% !important;
@@ -521,10 +521,10 @@ body {
 .welcome-header {
     background: linear-gradient(135deg, var(--primary-blue) 0%, var(--info-cyan) 100%);
     color: white;
-    padding: 2rem 1.5rem;
+    padding: 1.5rem 1.5rem;
     border-radius: 12px;
     box-shadow: 0 4px 20px rgba(0, 0, 0, 0.1);
-    margin: 0 0 1.5rem 0 !important;
+    margin: 0 0 1rem 0 !important;
     width: 100% !important;
     max-width: 100% !important;
     position: relative;
@@ -1717,8 +1717,8 @@ body:not(.login-page) {
 /* Contenido principal */
 .main-content {
     margin: 0 !important;
-    margin-top: 80px !important;
-    padding: 1.5rem !important;
+    margin-top: 60px !important;
+    padding: 1rem !important;
     min-height: calc(100vh - 80px);
     max-width: 100vw !important;
     width: 100vw !important;
@@ -3230,7 +3230,7 @@ body:not(.login-page) {
     .header-content {
         flex-direction: column;
         gap: 0.75rem;
-        gap: 0.75rem;: center;
+        text-align: center;
     }
     
     .header-title {
@@ -3239,14 +3239,14 @@ body:not(.login-page) {
     
     .recipes-main-content {
         padding: 0.75rem 1rem;
-        padding: 0.75rem 1rem;
+    }
     
     .section-header {
         flex-direction: column;
         gap: 0.75rem;
-        gap: 0.75rem;s: stretch;
+        align-items: stretch;
         padding: 0.75rem 1rem;
-        padding: 0.75rem 1rem;
+    }
     
     .section-actions {
         justify-content: center;
@@ -3569,4 +3569,32 @@ body:not(.login-page) {
 
 ::-webkit-scrollbar-thumb:hover {
     background: #a8a8a8;
+}
+
+/* ===== CRONÓMETRO CENTRADO ===== */
+.process-timer {
+    transition: all 0.3s ease;
+}
+
+.process-timer.timer-active {
+    animation: timerPulse 2s infinite;
+}
+
+@keyframes timerPulse {
+    0% { transform: translate(-50%, -50%) scale(1); }
+    50% { transform: translate(-50%, -50%) scale(1.05); }
+    100% { transform: translate(-50%, -50%) scale(1); }
+}
+
+.process-timer i {
+    margin-right: 0.5rem;
+}
+
+.process-timer.timer-active i {
+    animation: clockSpin 2s linear infinite;
+}
+
+@keyframes clockSpin {
+    from { transform: rotate(0deg); }
+    to { transform: rotate(360deg); }
 }

@@ -616,17 +616,12 @@
 
 
             showLoading(show) {
-                console.log('showLoading called with:', show); // Debug
-                
                 if (show) {
                     try {
                         // Verificar que LoadingModal esté disponible
                         if (typeof LoadingModal === 'undefined') {
-                            console.error('LoadingModal no está disponible');
                             return;
                         }
-                        
-                        console.log('Creando modal de loading...'); // Debug
                         
                         // Mostrar modal de loading a pantalla completa
                         this.loadingModal = LoadingModal.show({
@@ -637,11 +632,9 @@
                             showCancel: true,
                             cancelText: 'Cancelar',
                             onCancel: () => {
-                                console.log('Login cancelado por el usuario');
+                                // Login cancelado por el usuario
                             }
                         });
-
-                        console.log('Modal creado:', this.loadingModal); // Debug
 
                         // Simular progreso (en un caso real esto vendría del servidor)
                         let progress = 0;
@@ -665,15 +658,13 @@
                         this.loginBtn.disabled = true;
                     }
                 } else {
-                    console.log('Ocultando modal de loading...'); // Debug
-                    
                     // Ocultar modal de loading
                     if (this.loadingModal) {
                         try {
                             LoadingModal.hide(this.loadingModal);
                             this.loadingModal = null;
                         } catch (error) {
-                            console.error('Error al ocultar modal:', error);
+                            // Error silencioso al ocultar modal
                         }
                     }
                     

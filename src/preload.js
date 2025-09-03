@@ -40,11 +40,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
 // Interceptar errores de red para mejor manejo
 window.addEventListener('error', (event) => {
   if (event.target.tagName === 'SCRIPT' || event.target.tagName === 'LINK') {
-    console.error('Error cargando recurso:', event.target.src || event.target.href);
+    // Error silencioso de carga de recursos
   }
 });
 
 // Detectar cuando la aplicación está lista
 window.addEventListener('DOMContentLoaded', () => {
-  console.log('SILAR System Electron - Aplicación cargada');
+  // Aplicación cargada
 });

@@ -115,17 +115,8 @@ class RecipesScreen {
     async loadRecipes() {
         try {
             this.recipes = await this.app.apiCall('/recipes');
-            console.log('Recetas cargadas:', this.recipes.length);
-            if (this.recipes.length > 0) {
-                console.log('Primera receta cargada:', {
-                    id: this.recipes[0].id,
-                    name: this.recipes[0].name,
-                    parameters: this.recipes[0].parameters
-                });
-            }
             this.renderRecipesList();
         } catch (error) {
-            console.error('Error loading recipes:', error);
             this.app.showError('Error cargando las recetas');
         }
     }
