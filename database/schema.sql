@@ -431,8 +431,10 @@ BEGIN
     VALUES ('info', 'audit', 'Receta modificada', JSON_OBJECT(
         'recipe_id', NEW.id,
         'recipe_name', NEW.name,
-        'old_parameters', OLD.parameters,
-        'new_parameters', NEW.parameters
+        'old_name', OLD.name,
+        'new_name', NEW.name,
+        'old_type', OLD.type,
+        'new_type', NEW.type
     ));
 END //
 
@@ -458,9 +460,9 @@ DELIMITER ;
 -- =====================================================
 
 -- Índices compuestos para consultas comunes
-CREATE INDEX idx_processes_status_date ON processes(status, start_time);
-CREATE INDEX idx_variables_process_time ON system_variables(process_id, timestamp);
-CREATE INDEX idx_logs_level_time ON system_logs(log_level, timestamp);
+CREATE INDEX IF NOT EXISTS idx_processes_status_date ON processes(status, start_time);
+CREATE INDEX IF NOT EXISTS idx_variables_process_time ON system_variables(process_id, timestamp);
+CREATE INDEX IF NOT EXISTS idx_logs_level_time ON system_logs(log_level, timestamp);
 
 -- =====================================================
 -- Comentarios Finales

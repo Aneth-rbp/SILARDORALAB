@@ -1,0 +1,191 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SILAR System</title>
+    
+    <!-- Bootstrap 5.3 (Local) -->
+    <link href="css/bootstrap.min.css" rel="stylesheet">
+    <link href="css/bootstrap-icons.css" rel="stylesheet">
+    
+    <!-- Custom CSS -->
+    <link href="css/silar.css" rel="stylesheet">
+    
+    <!-- Socket.IO -->
+    <script src="/socket.io/socket.io.js"></script>
+</head>
+<body class="bg-light">
+    <!-- Header -->
+    <header class="main-header">
+        <div class="logo-container">
+            <img src="assets/dora-logo.png" alt="DORA Lab Logo">
+          
+        </div>
+        <div class="header-controls">
+            <!-- Left Section -->
+            <div class="header-left">
+                <!-- System Status Icons -->
+                <div class="status-icons">
+                    <button class="status-button arduino-btn" id="arduino-status" title="Estado Arduino">
+                        <i class="bi bi-list"></i>
+                        Arduino
+                    </button>
+                    <button class="status-button mysql-btn" id="db-status" title="Estado MySQL">
+                        <i class="bi bi-database"></i>
+                        MySQL
+                    </button>
+                </div>
+            </div>
+            
+            <!-- Center Section -->
+            <div class="header-center">
+                <!-- Dashboard Button (Icon Only) -->
+                <button class="btn btn-icon-only dashboard-center" onclick="window.silarApp.navigateToScreen('dashboard')" title="Volver al Dashboard">
+                    <i class="bi bi-house-door"></i>
+                </button>
+            </div>
+            
+            <!-- Right Section -->
+            <div class="header-right">
+                <!-- Clock -->
+                <div class="system-clock" id="system-clock"></div>
+                
+                <!-- User Menu -->
+                <div class="user-menu">
+                    <button class="btn btn-icon-only user-menu-toggle" onclick="toggleUserMenu()" title="Menú de Usuario">
+                        <i class="bi bi-person-circle"></i>
+                    </button>
+                    <div class="user-dropdown" id="user-dropdown">
+                        <div class="user-info">
+                            <i class="bi bi-person-circle"></i>
+                            <span id="user-name">Cargando...</span>
+                            <span class="user-role" id="user-role">Cargando...</span>
+                        </div>
+                        <div class="dropdown-divider"></div>
+                        <button class="dropdown-item" onclick="window.silarApp.logout()">
+                            <i class="bi bi-box-arrow-right me-2"></i>
+                            Cerrar Sesión
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </header>
+
+
+
+    <!-- Main Content -->
+    <main class="main-content">
+
+
+        <!-- Screen Container -->
+        <div id="screen-container">
+            <!-- Dashboard será cargado aquí dinámicamente -->
+        </div>
+    </main>
+
+    <!-- Loading Overlay -->
+    <div id="loading-overlay" class="position-fixed top-0 start-0 w-100 h-100 d-none" style="z-index: 9999; background: rgba(0,0,0,0.7);">
+        <div class="d-flex justify-content-center align-items-center h-100">
+            <div class="text-center text-white">
+                <div class="spinner-border text-primary mb-3" role="status" style="width: 3rem; height: 3rem;">
+                    <span class="visually-hidden">Cargando...</span>
+                </div>
+                <h5>Procesando...</h5>
+                <p class="text-white-50">Por favor espere</p>
+            </div>
+        </div>
+    </div>
+
+    <!-- Error Toast -->
+    <div class="toast-container position-fixed bottom-0 end-0 p-3">
+        <div id="error-toast" class="toast" role="alert" aria-live="assertive" aria-atomic="true">
+            <div class="toast-header bg-danger text-white">
+                <i class="bi bi-exclamation-triangle-fill me-2"></i>
+                <strong class="me-auto">Error del Sistema</strong>
+                <button type="button" class="btn-close btn-close-white" data-bs-dismiss="toast" aria-label="Close"></button>
+            </div>
+            <div class="toast-body" id="error-message">
+                Ha ocurrido un error inesperado.
+            </div>
+        </div>
+    </div>
+
+    <!-- Success Toast -->
+    <div class="toast-container position-fixed bottom-0 end-0 p-3">
+        <div id="success-toast" class="toast" role="alert" aria-live="assertive" aria-atomic="true">
+            <div class="toast-header bg-success text-white">
+                <i class="bi bi-check-circle-fill me-2"></i>
+                <strong class="me-auto">Operación Exitosa</strong>
+                <button type="button" class="btn-close btn-close-white" data-bs-dismiss="toast" aria-label="Close"></button>
+            </div>
+            <div class="toast-body" id="success-message">
+                Operación completada correctamente.
+            </div>
+        </div>
+    </div>
+
+    <!-- Modal de Confirmación de Logout -->
+    <div class="modal fade" id="logoutModal" tabindex="-1" aria-labelledby="logoutModalLabel" aria-hidden="true">
+        <div class="modal-dialog modal-dialog-centered">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title" id="logoutModalLabel">
+                        <i class="bi bi-box-arrow-right me-2"></i>
+                        Cerrar Sesión
+                    </h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                </div>
+                <div class="modal-body">
+                    <p class="mb-3">¿Está seguro que desea cerrar la sesión?</p>
+                    <p class="text-muted small mb-0">Se perderán los datos no guardados y regresará a la pantalla de login.</p>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">
+                        <i class="bi bi-x-circle me-1"></i>
+                        Cancelar
+                    </button>
+                    <button type="button" class="btn btn-danger" id="confirmLogoutBtn">
+                        <i class="bi bi-box-arrow-right me-1"></i>
+                        Cerrar Sesión
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+
+    <!-- Bootstrap JS (Local) -->
+    <script src="js/bootstrap.bundle.min.js"></script>
+    
+    <!-- Screen Scripts (cargar primero) -->
+    <script src="js/screens/dashboard.js"></script>
+    <script src="js/screens/recipes.js"></script>
+    <script src="js/screens/process.js"></script>
+    <script src="js/screens/monitoring.js"></script>
+    <script src="js/screens/configuration.js"></script>
+    <script src="js/screens/manual.js"></script>
+    
+    <!-- Main Application (cargar después) -->
+    <script src="js/silar-app.js"></script>
+    
+    <!-- User Menu Functions -->
+    <script>
+        function toggleUserMenu() {
+            const dropdown = document.getElementById('user-dropdown');
+            dropdown.classList.toggle('show');
+        }
+        
+        // Cerrar menú al hacer clic fuera
+        document.addEventListener('click', function(event) {
+            const userMenu = document.querySelector('.user-menu');
+            const dropdown = document.getElementById('user-dropdown');
+            
+            if (!userMenu.contains(event.target)) {
+                dropdown.classList.remove('show');
+            }
+        });
+    </script>
+</body>
+</html>

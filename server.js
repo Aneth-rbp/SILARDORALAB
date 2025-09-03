@@ -68,10 +68,33 @@ class SilarWebServer {
   setupExpress() {
     const app = express();
     this.server = http.createServer(app);
-    this.io = socketIo(this.server);
+    
+    // Configurar Socket.IO con CORS
+    this.io = socketIo(this.server, config.socket);
+
+    // Configurar CORS para Express
+    app.use((req, res, next) => {
+      res.header('Access-Control-Allow-Origin', '*');
+      res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+      res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, Authorization');
+      
+      if (req.method === 'OPTIONS') {
+        res.sendStatus(200);
+      } else {
+        next();
+      }
+    });
 
     app.use(express.json());
+    app.use(express.urlencoded({ extended: true }));
+    
+    // Servir archivos estáticos desde la carpeta public
     app.use(express.static(path.join(__dirname, 'src', 'public')));
+    
+    // Servir Socket.IO client
+    app.get('/socket.io/socket.io.js', (req, res) => {
+      res.sendFile(path.join(__dirname, 'node_modules', 'socket.io', 'client-dist', 'socket.io.js'));
+    });
 
     // Middleware de logging
     app.use((req, res, next) => {
@@ -80,6 +103,11 @@ class SilarWebServer {
         userAgent: req.get('User-Agent')
       });
       next();
+    });
+
+    // Ruta raíz - redirigir a login
+    app.get('/', (req, res) => {
+      res.redirect('/login.html');
     });
 
     // Rutas API
@@ -95,8 +123,18 @@ class SilarWebServer {
     // Middleware de manejo de errores
     app.use(errorHandler.middleware());
 
-    this.server.listen(config.app.port, () => {
+    // Manejar rutas no encontradas
+    app.use('*', (req, res) => {
+      res.status(404).json({ 
+        success: false, 
+        message: 'Ruta no encontrada',
+        path: req.originalUrl 
+      });
+    });
+
+    this.server.listen(config.app.port, '0.0.0.0', () => {
       logger.info(`Servidor web ejecutándose en puerto ${config.app.port}`);
+      logger.info(`Frontend disponible en: http://localhost:${config.app.port}`);
     });
 
     this.setupSocketHandlers();

@@ -1,0 +1,755 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="description" content="Sistema SILAR - Acceso al sistema de control de procesos químicos">
+    <meta name="theme-color" content="#2563EB">
+        <title>SILAR System - Acceso</title>
+    
+    <!-- Bootstrap 5.3 -->
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.0/font/bootstrap-icons.css" rel="stylesheet">
+    
+    <!-- Custom CSS -->
+    <link href="css/silar.css" rel="stylesheet">
+    
+    <style>
+        :root {
+            --primary-blue: #2563EB;
+            --secondary-blue: #1e40af;
+            --success-green: #10B981;
+            --danger-red: #EF4444;
+            --gray-50: #F9FAFB;
+            --gray-100: #F3F4F6;
+            --gray-200: #E5E7EB;
+            --gray-500: #6B7280;
+            --gray-600: #4B5563;
+            --shadow-sm: 0 1px 2px 0 rgba(0, 0, 0, 0.05);
+            --shadow-md: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+            --shadow-lg: 0 25px 50px rgba(0, 0, 0, 0.15);
+        }
+
+        * {
+            box-sizing: border-box;
+        }
+
+        body {
+            background: linear-gradient(135deg, var(--primary-blue) 0%, var(--secondary-blue) 100%);
+            min-height: 100vh;
+            height: 100vh;
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+            margin: 0;
+            padding: 0;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            overflow: hidden;
+        }
+
+        .login-container {
+            background: white;
+            border-radius: 20px;
+            box-shadow: var(--shadow-lg);
+            overflow: hidden;
+            max-width: 480px;
+            width: 90%;
+            margin: 0;
+            position: relative;
+        }
+
+        .login-header {
+            background: linear-gradient(135deg, var(--primary-blue), var(--secondary-blue));
+            color: white;
+            padding: 2rem 2rem;
+            text-align: center;
+            position: relative;
+        }
+
+        .login-header::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            height: 4px;
+            background: linear-gradient(90deg, var(--success-green), #059669);
+        }
+
+        .dora-logo {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            margin: 0 auto 1rem;
+        }
+
+        .dora-logo img {
+            filter: brightness(0) invert(1);
+            transition: transform 0.3s ease;
+            max-height: 60px;
+            width: auto;
+        }
+
+        .dora-logo img:hover {
+            transform: scale(1.05);
+        }
+
+        .login-title {
+            font-size: 2rem;
+            font-weight: 700;
+            margin: 0 0 0.5rem;
+            letter-spacing: -0.025em;
+        }
+
+        .login-subtitle {
+            font-size: 1rem;
+            opacity: 0.9;
+            margin: 0;
+            font-weight: 400;
+        }
+
+        .login-form {
+            padding: 2rem;
+        }
+
+        .form-group {
+            margin-bottom: 1.5rem;
+        }
+
+        .form-label {
+            font-weight: 600;
+            color: var(--gray-700);
+            margin-bottom: 0.5rem;
+            display: block;
+        }
+
+        .form-control {
+            border-radius: 12px;
+            border: 2px solid var(--gray-200);
+            padding: 0.875rem 1rem;
+            font-size: 1rem;
+            transition: all 0.2s ease;
+            background-color: white;
+        }
+
+        .form-control:focus {
+            border-color: var(--primary-blue);
+            box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.1);
+            outline: none;
+        }
+
+        .form-control.is-invalid {
+            border-color: var(--danger-red);
+            box-shadow: 0 0 0 3px rgba(239, 68, 68, 0.1);
+        }
+
+        .input-group-text {
+            background: var(--gray-50);
+            border: 2px solid var(--gray-200);
+            border-right: none;
+            color: var(--gray-600);
+            border-radius: 12px 0 0 12px;
+            padding: 0.875rem 1rem;
+        }
+
+        .input-group .form-control {
+            border-left: none;
+            border-radius: 0 12px 12px 0;
+        }
+
+        .input-group:focus-within .input-group-text {
+            border-color: var(--primary-blue);
+            background: rgba(37, 99, 235, 0.05);
+            color: var(--primary-blue);
+        }
+
+        .btn-toggle-password {
+            background: transparent;
+            border: 2px solid var(--gray-200);
+            border-left: none;
+            color: var(--gray-600);
+            padding: 0.875rem 1rem;
+            border-radius: 0 12px 12px 0;
+            transition: all 0.2s ease;
+        }
+
+        .btn-toggle-password:hover {
+            background: var(--gray-100);
+            color: var(--gray-700);
+        }
+
+        .btn-login {
+            background: linear-gradient(135deg, var(--primary-blue), var(--secondary-blue));
+            border: none;
+            border-radius: 12px;
+            padding: 1rem 2rem;
+            font-weight: 600;
+            font-size: 1.1rem;
+            color: white;
+            width: 100%;
+            transition: all 0.3s ease;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .btn-login:hover {
+            background: linear-gradient(135deg, var(--secondary-blue), var(--primary-blue));
+            transform: translateY(-2px);
+            box-shadow: 0 8px 25px rgba(37, 99, 235, 0.3);
+            color: white;
+        }
+
+        .btn-login:active {
+            transform: translateY(0);
+        }
+
+        .btn-login:disabled {
+            background: var(--gray-400);
+            transform: none;
+            box-shadow: none;
+            cursor: not-allowed;
+        }
+
+        /* System Status Corner Indicator */
+        .system-status-corner {
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+            z-index: 1000;
+        }
+
+        .status-indicator {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            width: 50px;
+            height: 50px;
+            border-radius: 50%;
+            color: white;
+            font-size: 1.2rem;
+            box-shadow: var(--shadow-md);
+            transition: all 0.3s ease;
+            position: relative;
+        }
+
+        .status-indicator:hover {
+            transform: scale(1.1);
+            box-shadow: var(--shadow-lg);
+        }
+
+        .status-indicator.arduino {
+            background: var(--danger-red);
+        }
+
+        .status-indicator.mysql {
+            background: var(--success-green);
+        }
+
+        .status-indicator::after {
+            content: '';
+            position: absolute;
+            top: -2px;
+            right: -2px;
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            background: white;
+            border: 2px solid var(--gray-200);
+        }
+
+        .status-indicator.arduino::after {
+            background: var(--danger-red);
+        }
+
+        .status-indicator.mysql::after {
+            background: var(--success-green);
+        }
+
+        .invalid-feedback {
+            display: block;
+            color: var(--danger-red);
+            font-size: 0.875rem;
+            margin-top: 0.25rem;
+            font-weight: 500;
+        }
+
+        .version-info {
+            text-align: center;
+            padding: 1.25rem;
+            background: var(--gray-50);
+            color: var(--gray-500);
+            font-size: 0.875rem;
+            border-top: 1px solid var(--gray-200);
+        }
+
+        .loading-overlay {
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(255, 255, 255, 0.95);
+            display: none;
+            align-items: center;
+            justify-content: center;
+            border-radius: 20px;
+            backdrop-filter: blur(4px);
+        }
+
+        .shake {
+            animation: shake 0.6s ease-in-out;
+        }
+
+        @keyframes shake {
+            0%, 100% { transform: translateX(0); }
+            10%, 30%, 50%, 70%, 90% { transform: translateX(-5px); }
+            20%, 40%, 60%, 80% { transform: translateX(5px); }
+        }
+
+
+
+        /* Responsive Design */
+        @media (max-width: 576px) {
+            .login-container {
+                width: 95%;
+                margin: 0;
+            }
+            
+            .login-header {
+                padding: 2rem 1.5rem;
+            }
+            
+            .login-form {
+                padding: 1.5rem;
+            }
+            
+            .login-title {
+                font-size: 1.75rem;
+            }
+            
+            .system-status-corner {
+                top: 10px;
+                right: 10px;
+            }
+            
+            .status-indicator {
+                width: 45px;
+                height: 45px;
+                font-size: 1rem;
+            }
+        }
+
+        /* Focus styles for accessibility */
+        .form-control:focus,
+        .btn:focus {
+            outline: 2px solid var(--primary-blue);
+            outline-offset: 2px;
+        }
+
+        /* High contrast mode support */
+        @media (prefers-contrast: high) {
+            .form-control {
+                border-width: 3px;
+            }
+            
+            .btn-login {
+                border: 2px solid white;
+            }
+        }
+
+        /* Reduced motion support */
+        @media (prefers-reduced-motion: reduce) {
+            .btn-login:hover,
+            .dora-logo img:hover,
+            .status-indicator:hover {
+                transform: none;
+            }
+            
+            .shake {
+                animation: none;
+            }
+        }
+    </style>
+</head>
+<body>
+    <!-- System Status Corner Indicator -->
+    <div class="system-status-corner" aria-label="Estado del sistema">
+        <div class="status-indicator arduino" id="arduino-status" title="Estado Arduino">
+            <i class="bi bi-usb"></i>
+        </div>
+        <div class="status-indicator mysql" id="db-status" title="Estado MySQL">
+            <i class="bi bi-database"></i>
+        </div>
+    </div>
+
+    <main class="login-container" role="main">
+        <!-- Loading Overlay -->
+        <div class="loading-overlay" id="loading-overlay" aria-hidden="true">
+            <div class="text-center">
+                <div class="spinner-border text-primary mb-3" role="status" aria-label="Verificando credenciales">
+                    <span class="visually-hidden">Verificando...</span>
+                </div>
+                <div class="fw-medium text-primary">Verificando credenciales...</div>
+            </div>
+        </div>
+
+        <!-- Header -->
+        <header class="login-header">
+            <div class="dora-logo">
+                <img src="assets/dora-logo.png" alt="DORA Lab Logo" width="60" height="60">
+            </div>
+            <h1 class="login-title">Sistema SILAR</h1>
+            <p class="login-subtitle">Successive Ionic Layer Adsorption and Reaction</p>
+        </header>
+
+        <!-- Main Content -->
+        <div class="login-form">
+            <!-- Login Form -->
+            <form id="login-form" novalidate aria-labelledby="login-form-title">
+                <h2 id="login-form-title" class="visually-hidden">Formulario de Acceso</h2>
+                
+                <div class="form-group">
+                    <label class="form-label" for="username">Usuario</label>
+                    <div class="input-group">
+                        <span class="input-group-text" aria-hidden="true">
+                            <i class="bi bi-person"></i>
+                        </span>
+                        <input 
+                            type="text" 
+                            class="form-control" 
+                            id="username" 
+                            name="username" 
+                            placeholder="Ingrese su usuario" 
+                            required 
+                            autocomplete="username"
+                            aria-describedby="username-error"
+                            aria-invalid="false">
+                    </div>
+                </div>
+
+                <div class="form-group">
+                    <label class="form-label" for="password">Contraseña</label>
+                    <div class="input-group">
+                        <span class="input-group-text" aria-hidden="true">
+                            <i class="bi bi-lock"></i>
+                        </span>
+                        <input 
+                            type="password" 
+                            class="form-control" 
+                            id="password" 
+                            name="password" 
+                            placeholder="Ingrese su contraseña" 
+                            required 
+                            autocomplete="current-password"
+                            aria-describedby="password-error"
+                            aria-invalid="false">
+                        <button 
+                            class="btn btn-toggle-password" 
+                            type="button" 
+                            id="toggle-password"
+                            aria-label="Mostrar contraseña">
+                            <i class="bi bi-eye" aria-hidden="true"></i>
+                        </button>
+                    </div>
+                </div>
+
+                <button type="submit" class="btn btn-login" id="login-btn">
+                    <i class="bi bi-box-arrow-in-right me-2" aria-hidden="true"></i>
+                    Iniciar Sesión
+                </button>
+            </form>
+        </div>
+
+        <!-- Version Info -->
+        <footer class="version-info">
+            <div class="d-flex justify-content-between align-items-center">
+                <span>SILAR System v2.0 - DORA Lab</span>
+                <time id="current-time" datetime=""></time>
+            </div>
+        </footer>
+    </main>
+
+    <!-- Bootstrap JS -->
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
+    
+    <!-- Loading Modal Component -->
+    <script src="js/components/loading-modal.js"></script>
+    
+    <script>
+        // Login System Class
+        class LoginSystem {
+            constructor() {
+                this.form = document.getElementById('login-form');
+                this.usernameInput = document.getElementById('username');
+                this.passwordInput = document.getElementById('password');
+                this.togglePasswordBtn = document.getElementById('toggle-password');
+                this.loginBtn = document.getElementById('login-btn');
+                this.loadingOverlay = document.getElementById('loading-overlay');
+                this.loadingModal = null;
+                
+                this.init();
+            }
+
+            init() {
+                this.bindEvents();
+                this.checkSystemStatus();
+                this.updateTime();
+                this.startTimeUpdate();
+                this.usernameInput.focus();
+            }
+
+            bindEvents() {
+                this.form.addEventListener('submit', this.handleLogin.bind(this));
+                this.togglePasswordBtn.addEventListener('click', this.togglePasswordVisibility.bind(this));
+                
+                // Real-time validation
+                this.usernameInput.addEventListener('blur', () => this.validateField(this.usernameInput));
+                this.passwordInput.addEventListener('blur', () => this.validateField(this.passwordInput));
+                
+                // Input validation on typing
+                this.usernameInput.addEventListener('input', () => this.clearFieldError(this.usernameInput));
+                this.passwordInput.addEventListener('input', () => this.clearFieldError(this.passwordInput));
+            }
+
+            async handleLogin(e) {
+                e.preventDefault();
+                
+                if (!this.validateForm()) {
+                    return;
+                }
+
+                const credentials = {
+                    username: this.usernameInput.value.trim(),
+                    password: this.passwordInput.value
+                };
+
+                this.showLoading(true);
+
+                try {
+                    const response = await fetch('/api/auth/login', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json'
+                        },
+                        body: JSON.stringify(credentials)
+                    });
+
+                    const result = await response.json();
+
+                    if (response.ok && result.success) {
+                        this.handleSuccessfulLogin(result);
+                    } else {
+                        this.handleLoginError(result.message || 'Credenciales incorrectas');
+                    }
+
+                } catch (error) {
+                    console.error('Login error:', error);
+                    this.handleLoginError('Error de conexión. Verifique el servidor.');
+                }
+
+                this.showLoading(false);
+            }
+
+            validateForm() {
+                let isValid = true;
+                
+                isValid = this.validateField(this.usernameInput) && isValid;
+                isValid = this.validateField(this.passwordInput) && isValid;
+                
+                return isValid;
+            }
+
+            validateField(field) {
+                const value = field.value.trim();
+                const isValid = value.length > 0;
+                
+                field.classList.toggle('is-invalid', !isValid);
+                field.setAttribute('aria-invalid', !isValid);
+                
+                return isValid;
+            }
+
+            clearFieldError(field) {
+                if (field.classList.contains('is-invalid')) {
+                    field.classList.remove('is-invalid');
+                    field.setAttribute('aria-invalid', 'false');
+                }
+            }
+
+            togglePasswordVisibility() {
+                const type = this.passwordInput.type === 'password' ? 'text' : 'password';
+                const icon = this.togglePasswordBtn.querySelector('i');
+                
+                this.passwordInput.type = type;
+                icon.className = type === 'password' ? 'bi bi-eye' : 'bi bi-eye-slash';
+                
+                this.togglePasswordBtn.setAttribute(
+                    'aria-label', 
+                    type === 'password' ? 'Mostrar contraseña' : 'Ocultar contraseña'
+                );
+            }
+
+            handleSuccessfulLogin(result) {
+                const userSession = {
+                    userId: result.user.id,
+                    username: result.user.username,
+                    fullName: result.user.full_name,
+                    role: result.user.role,
+                    loginTime: new Date().toISOString(),
+                    token: result.token
+                };
+                
+                localStorage.setItem('silar_user_session', JSON.stringify(userSession));
+                
+                // Redirigir inmediatamente sin mensajes
+                window.location.href = 'index.html';
+            }
+
+            handleLoginError(message) {
+                // Solo hacer shake del formulario sin mensajes
+                this.shakeForm();
+            }
+
+
+
+            showLoading(show) {
+                console.log('showLoading called with:', show); // Debug
+                
+                if (show) {
+                    try {
+                        // Verificar que LoadingModal esté disponible
+                        if (typeof LoadingModal === 'undefined') {
+                            console.error('LoadingModal no está disponible');
+                            return;
+                        }
+                        
+                        console.log('Creando modal de loading...'); // Debug
+                        
+                        // Mostrar modal de loading a pantalla completa
+                        this.loadingModal = LoadingModal.show({
+                            title: 'Verificando Credenciales',
+                            subtitle: 'Conectando con el sistema...',
+                            showProgress: true,
+                            progressText: 'Progreso de verificación',
+                            showCancel: true,
+                            cancelText: 'Cancelar',
+                            onCancel: () => {
+                                console.log('Login cancelado por el usuario');
+                            }
+                        });
+
+                        console.log('Modal creado:', this.loadingModal); // Debug
+
+                        // Simular progreso (en un caso real esto vendría del servidor)
+                        let progress = 0;
+                        const progressInterval = setInterval(() => {
+                            progress += Math.random() * 20;
+                            if (progress >= 100) {
+                                progress = 100;
+                                clearInterval(progressInterval);
+                            }
+                            if (this.loadingModal && this.loadingModal.updateProgress) {
+                                this.loadingModal.updateProgress(progress);
+                            }
+                        }, 200);
+
+                        this.loginBtn.disabled = true;
+                        
+                    } catch (error) {
+                        console.error('Error al mostrar modal de loading:', error);
+                        // Fallback: usar el overlay original
+                        this.loadingOverlay.style.display = 'flex';
+                        this.loginBtn.disabled = true;
+                    }
+                } else {
+                    console.log('Ocultando modal de loading...'); // Debug
+                    
+                    // Ocultar modal de loading
+                    if (this.loadingModal) {
+                        try {
+                            LoadingModal.hide(this.loadingModal);
+                            this.loadingModal = null;
+                        } catch (error) {
+                            console.error('Error al ocultar modal:', error);
+                        }
+                    }
+                    
+                    // Ocultar overlay original también
+                    this.loadingOverlay.style.display = 'none';
+                    this.loginBtn.disabled = false;
+                }
+            }
+
+            shakeForm() {
+                const container = document.querySelector('.login-container');
+                container.classList.add('shake');
+                setTimeout(() => container.classList.remove('shake'), 600);
+            }
+
+
+
+            async checkSystemStatus() {
+                try {
+                    const response = await fetch('/api/system/status');
+                    const status = await response.json();
+                    
+                    this.updateStatusBadge('arduino-status', status.arduino);
+                    this.updateStatusBadge('db-status', status.database);
+                    
+                } catch (error) {
+                    this.updateStatusBadge('arduino-status', false);
+                    this.updateStatusBadge('db-status', false);
+                    console.log('Sistema en modo offline');
+                }
+            }
+
+            updateStatusBadge(elementId, isOnline) {
+                const indicator = document.getElementById(elementId);
+                if (indicator) {
+                    const isArduino = elementId === 'arduino-status';
+                    const newClass = isOnline ? 'mysql' : 'arduino';
+                    const newTitle = isArduino ? 
+                        `Estado Arduino: ${isOnline ? 'Conectado' : 'Desconectado'}` :
+                        `Estado MySQL: ${isOnline ? 'Conectado' : 'Desconectado'}`;
+                    
+                    indicator.className = `status-indicator ${newClass}`;
+                    indicator.setAttribute('title', newTitle);
+                }
+            }
+
+            updateTime() {
+                const timeElement = document.getElementById('current-time');
+                if (timeElement) {
+                    const now = new Date();
+                    const timeString = now.toLocaleTimeString('es-ES', {
+                        hour: '2-digit',
+                        minute: '2-digit'
+                    });
+                    
+                    timeElement.textContent = timeString;
+                    timeElement.setAttribute('datetime', now.toISOString());
+                }
+            }
+
+            startTimeUpdate() {
+                setInterval(() => this.updateTime(), 1000);
+            }
+        }
+
+        // Initialize when DOM is ready
+        document.addEventListener('DOMContentLoaded', () => {
+            // Verificar que LoadingModal esté disponible
+            if (typeof LoadingModal !== 'undefined') {
+                console.log('✅ LoadingModal cargado correctamente');
+            } else {
+                console.error('❌ LoadingModal no está disponible');
+            }
+            
+            new LoginSystem();
+        });
+    </script>
+</body>
+</html>

@@ -12,18 +12,23 @@ module.exports = {
     version: '2.0.0',
     description: 'Sistema de control SILAR para laboratorio local',
     author: 'DORA Lab',
-    port: 3000,
-    environment: process.env.NODE_ENV || 'development'
+    port: process.env.PORT || 3000,
+    host: process.env.HOST || '0.0.0.0',
+    environment: process.env.NODE_ENV || 'development',
+    baseUrl: process.env.BASE_URL || 'http://localhost:3000'
   },
 
   // Configuración de la base de datos
   database: {
-    host: 'localhost',
-    user: 'root',
-    password: '',
-    database: 'silar_db',
+    host: process.env.DB_HOST || 'localhost',
+    user: process.env.DB_USER || 'root',
+    password: process.env.DB_PASSWORD || '',
+    database: process.env.DB_NAME || 'silar_db',
     charset: 'utf8mb4',
-    timezone: 'local'
+    timezone: 'local',
+    connectionLimit: 10,
+    acquireTimeout: 60000,
+    timeout: 60000
   },
 
   // Configuración de Arduino
@@ -32,7 +37,8 @@ module.exports = {
     autoConnect: true,
     timeout: 5000,
     retryAttempts: 3,
-    retryDelay: 1000
+    retryDelay: 1000,
+    port: process.env.ARDUINO_PORT || null
   },
 
   // Configuración de seguridad
@@ -41,7 +47,8 @@ module.exports = {
     tokenExpiration: 8 * 60 * 60 * 1000, // 8 horas
     maxLoginAttempts: 5,
     lockoutDuration: 15 * 60 * 1000, // 15 minutos
-    passwordMinLength: 6
+    passwordMinLength: 6,
+    corsOrigins: ['http://localhost:3000', 'http://127.0.0.1:3000', 'file://']
   },
 
   // Configuración de archivos
@@ -55,7 +62,7 @@ module.exports = {
 
   // Configuración de logging
   logging: {
-    level: 'info',
+    level: process.env.LOG_LEVEL || 'info',
     file: 'silar-system.log',
     maxSize: '10m',
     maxFiles: 5,
@@ -83,8 +90,19 @@ module.exports = {
   // Configuración de desarrollo
   development: {
     debug: process.env.NODE_ENV === 'development',
-    demoMode: false,
-    mockArduino: true,
+    demoMode: process.env.DEMO_MODE === 'true',
+    mockArduino: process.env.MOCK_ARDUINO === 'true',
     hotReload: true
+  },
+
+  // Configuración de Socket.IO
+  socket: {
+    cors: {
+      origin: ['http://localhost:3000', 'http://127.0.0.1:3000', 'file://'],
+      methods: ['GET', 'POST'],
+      credentials: true
+    },
+    pingTimeout: 60000,
+    pingInterval: 25000
   }
 };

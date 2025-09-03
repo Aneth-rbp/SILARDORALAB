@@ -8,7 +8,7 @@
     "dev": "electron . --dev",
     "web": "node server.js",
     "build": "electron-builder",
-    "setup-db": "mysql -u root < database/schema.sql",
+    "setup-db": "setup-database.bat",
     "update-db": "mysql -u root < update-database.sql",
     "clean": "rm -rf node_modules package-lock.json",
     "install-deps": "npm install",

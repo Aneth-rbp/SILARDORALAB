@@ -25,7 +25,7 @@ class Validator {
       },
       user: {
         username: { required: true, minLength: 3, maxLength: 50, pattern: /^[a-zA-Z0-9._-]+$/ },
-        password: { required: true, minLength: 6, maxLength: 255 },
+        password: { required: true, minLength: 4, maxLength: 255 },
         fullName: { required: true, minLength: 2, maxLength: 100 },
         email: { required: false, type: 'email' },
         role: { required: true, enum: ['admin', 'usuario'] }
