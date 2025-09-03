@@ -1,0 +1,55 @@
+{
+  "name": "silar-system",
+  "version": "2.0.0",
+  "description": "Sistema de control SILAR para laboratorio local",
+  "main": "src/main.js",
+  "scripts": {
+    "start": "electron .",
+    "dev": "electron . --dev",
+    "web": "node server.js",
+    "build": "electron-builder",
+    "setup-db": "mysql -u root < database/schema.sql",
+    "update-db": "mysql -u root < update-database.sql",
+    "clean": "rm -rf node_modules package-lock.json",
+    "install-deps": "npm install",
+    "lint": "eslint src/",
+    "test": "echo \"No tests specified\" && exit 0"
+  },
+  "keywords": [
+    "silar",
+    "laboratory",
+    "control",
+    "arduino",
+    "electron"
+  ],
+  "author": "DORA Lab",
+  "license": "MIT",
+  "devDependencies": {
+    "electron": "^28.0.0",
+    "electron-builder": "^24.0.0",
+    "eslint": "^8.0.0"
+  },
+  "dependencies": {
+    "express": "^4.18.0",
+    "socket.io": "^4.7.0",
+    "mysql2": "^3.6.0",
+    "serialport": "^12.0.0",
+    "crypto": "^1.0.1"
+  },
+  "build": {
+    "appId": "com.doralab.silar",
+    "productName": "SILAR System",
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "src/**/*",
+      "database/**/*",
+      "node_modules/**/*"
+    ],
+    "win": {
+      "target": "nsis",
+      "icon": "src/public/assets/dora-logo.png"
+    }
+  }
+}
