@@ -15,11 +15,17 @@ const logger = require('./src/utils/logger');
 const errorHandler = require('./src/utils/errorHandler');
 const validator = require('./src/utils/validator');
 
+// Importar controlador de Arduino
+const { getInstance } = require('./src/arduino/ArduinoController');
+const { ArduinoController } = require('./src/arduino/ArduinoController');
+// const { getInstance: getFlasherInstance } = require('./src/arduino/flasher/ArduinoFlasher'); // Comentado - módulo no disponible
+
 class SilarWebServer {
   constructor() {
     this.server = null;
     this.io = null;
     this.dbConnection = null;
+    this.arduinoController = getInstance();
     this.setupExpress();
   }
 
@@ -119,6 +125,18 @@ class SilarWebServer {
     app.get('/api/system/status', this.getSystemStatus.bind(this));
     app.post('/api/process/start', this.startProcess.bind(this));
     app.post('/api/process/stop', this.stopProcess.bind(this));
+    
+    // Rutas API Arduino
+    app.get('/api/arduino/ports', this.getArduinoPorts.bind(this));
+    app.post('/api/arduino/connect', this.connectArduino.bind(this));
+    app.post('/api/arduino/disconnect', this.disconnectArduino.bind(this));
+    app.get('/api/arduino/state', this.getArduinoState.bind(this));
+    app.post('/api/arduino/command', this.sendArduinoCommand.bind(this));
+    
+    // Rutas API Flash Arduino
+    app.get('/api/arduino/flash/info', this.getFlashInfo.bind(this));
+    app.post('/api/arduino/flash', this.flashArduino.bind(this));
+    app.get('/api/arduino/flash/verify', this.verifyFirmware.bind(this));
 
     // Middleware de manejo de errores
     app.use(errorHandler.middleware());
@@ -144,13 +162,84 @@ class SilarWebServer {
     this.io.on('connection', (socket) => {
       logger.info('Cliente WebSocket conectado', { socketId: socket.id });
       
-      socket.on('arduino-command', (data) => {
-        logger.info('Comando Arduino recibido', { command: data, socketId: socket.id });
+      // Enviar estado actual del Arduino al conectar
+      socket.emit('arduino-state', this.arduinoController.getState());
+      
+      // Manejar comandos Arduino desde el cliente
+      socket.on('arduino-command', async (data) => {
+        try {
+          logger.info('Comando Arduino recibido', { command: data, socketId: socket.id });
+          const { command, params } = data;
+          let result;
+
+          switch(command) {
+            case 'MODE_MANUAL':
+              result = await this.arduinoController.setModeManual();
+              break;
+            case 'MODE_AUTOMATIC':
+              result = await this.arduinoController.setModeAutomatic();
+              break;
+            case 'HOME':
+              result = await this.arduinoController.executeHome();
+              break;
+            case 'MOVE_Y':
+              result = await this.arduinoController.moveAxisY(params?.steps || 0);
+              break;
+            case 'MOVE_Z':
+              result = await this.arduinoController.moveAxisZ(params?.steps || 0);
+              break;
+            case 'STOP':
+              result = await this.arduinoController.emergencyStop();
+              break;
+            default:
+              socket.emit('arduino-error', { error: 'Comando desconocido' });
+              return;
+          }
+          
+          socket.emit('arduino-command-result', { success: true, result });
+        } catch (error) {
+          logger.error('Error ejecutando comando Arduino:', error);
+          socket.emit('arduino-error', { error: error.message });
+        }
       });
 
       socket.on('disconnect', () => {
         logger.info('Cliente WebSocket desconectado', { socketId: socket.id });
       });
+    });
+    
+    // Reenviar eventos del Arduino a todos los clientes conectados
+    this.setupArduinoEventForwarding();
+  }
+
+  setupArduinoEventForwarding() {
+    // Datos parseados del Arduino
+    this.arduinoController.on('data', (parsed) => {
+      this.io.emit('arduino-data', parsed);
+      logger.debug('Arduino data broadcast', { type: parsed.type });
+    });
+    
+    // Cambios de estado
+    this.arduinoController.on('state-changed', (state) => {
+      this.io.emit('arduino-state', state);
+    });
+    
+    // Conexión establecida
+    this.arduinoController.on('connected', (data) => {
+      this.io.emit('arduino-connected', data);
+      logger.info('Arduino conectado - notificando clientes');
+    });
+    
+    // Desconexión
+    this.arduinoController.on('disconnected', () => {
+      this.io.emit('arduino-disconnected');
+      logger.warn('Arduino desconectado - notificando clientes');
+    });
+    
+    // Errores
+    this.arduinoController.on('error', (error) => {
+      this.io.emit('arduino-error', error);
+      logger.error('Arduino error broadcast', error);
     });
   }
 
@@ -175,9 +264,21 @@ class SilarWebServer {
     try {
       const { username, password } = req.body;
       
+      console.log('🔐 Intento de login:', { username, password: '***' });
+      
+      // Verificar conexión a BD
+      if (!this.dbConnection) {
+        console.error('❌ No hay conexión a la base de datos');
+        return res.status(500).json({
+          success: false,
+          message: 'Error de conexión a la base de datos'
+        });
+      }
+      
       // Validar datos de entrada
       const loginValidation = validator.validateLogin({ username, password });
       if (!loginValidation.isValid) {
+        console.log('❌ Validación fallida:', loginValidation.errors);
         return res.status(400).json({
           success: false,
           message: 'Datos de login inválidos',
@@ -186,10 +287,13 @@ class SilarWebServer {
       }
 
       // Buscar usuario en la base de datos
+      console.log('🔍 Buscando usuario en BD:', username);
       const [rows] = await this.dbConnection.execute(
         'SELECT id, username, password, full_name, role, email, is_active FROM users WHERE username = ? AND is_active = 1',
         [username]
       );
+      
+      console.log('📊 Resultado BD:', rows.length, 'usuarios encontrados');
 
       if (rows.length === 0) {
         logger.warn('Intento de login fallido', { username, reason: 'Usuario no encontrado' });
@@ -200,12 +304,21 @@ class SilarWebServer {
       }
 
       const user = rows[0];
+      console.log('👤 Usuario encontrado:', { id: user.id, username: user.username, role: user.role });
       
       // Verificar contraseña (MD5 simple para demo)
       const crypto = require('crypto');
       const hashedPassword = crypto.createHash('md5').update(password).digest('hex');
       
+      console.log('🔐 Verificando contraseña:', {
+        passwordReceived: '***',
+        passwordHashed: hashedPassword,
+        passwordStored: user.password,
+        match: user.password === hashedPassword
+      });
+      
       if (user.password !== hashedPassword) {
+        console.log('❌ Contraseña incorrecta');
         logger.warn('Intento de login fallido', { username, reason: 'Contraseña incorrecta' });
         return res.status(401).json({ 
           success: false, 
@@ -566,11 +679,189 @@ class SilarWebServer {
   }
 
   async getSystemStatus(req, res) {
+    const arduinoState = this.arduinoController.getState();
     res.json({
-      arduino: false,
+      arduino: arduinoState.isConnected,
+      arduinoPort: arduinoState.port,
+      arduinoMode: arduinoState.mode,
       database: this.dbConnection ? true : false,
       timestamp: new Date().toISOString()
     });
+  }
+
+  async getArduinoPorts(req, res) {
+    try {
+      const ports = await ArduinoController.listAvailablePorts();
+      res.json({
+        success: true,
+        ports: ports
+      });
+    } catch (error) {
+      logger.error('Error listando puertos Arduino:', error);
+      res.status(500).json({
+        success: false,
+        error: error.message
+      });
+    }
+  }
+
+  async connectArduino(req, res) {
+    try {
+      const { port, baudRate } = req.body;
+      await this.arduinoController.connect(port, baudRate || 9600);
+      
+      logger.info('Arduino conectado exitosamente', { port });
+      
+      res.json({
+        success: true,
+        message: 'Arduino conectado exitosamente',
+        state: this.arduinoController.getState()
+      });
+    } catch (error) {
+      logger.error('Error conectando Arduino:', error);
+      res.status(500).json({
+        success: false,
+        error: error.message
+      });
+    }
+  }
+
+  async disconnectArduino(req, res) {
+    try {
+      await this.arduinoController.disconnect();
+      
+      logger.info('Arduino desconectado');
+      
+      res.json({
+        success: true,
+        message: 'Arduino desconectado'
+      });
+    } catch (error) {
+      logger.error('Error desconectando Arduino:', error);
+      res.status(500).json({
+        success: false,
+        error: error.message
+      });
+    }
+  }
+
+  async getArduinoState(req, res) {
+    try {
+      const state = this.arduinoController.getState();
+      res.json({
+        success: true,
+        state: state
+      });
+    } catch (error) {
+      logger.error('Error obteniendo estado Arduino:', error);
+      res.status(500).json({
+        success: false,
+        error: error.message
+      });
+    }
+  }
+
+  async sendArduinoCommand(req, res) {
+    try {
+      const { command, params } = req.body;
+      
+      if (!command) {
+        return res.status(400).json({
+          success: false,
+          error: 'Comando requerido'
+        });
+      }
+
+      let result;
+
+      switch(command) {
+        case 'MODE_MANUAL':
+          result = await this.arduinoController.setModeManual();
+          break;
+        case 'MODE_AUTOMATIC':
+          result = await this.arduinoController.setModeAutomatic();
+          break;
+        case 'HOME':
+          result = await this.arduinoController.executeHome();
+          break;
+        case 'MOVE_Y':
+          if (!params?.steps) {
+            return res.status(400).json({
+              success: false,
+              error: 'Parámetro steps requerido para MOVE_Y'
+            });
+          }
+          result = await this.arduinoController.moveAxisY(params.steps);
+          break;
+        case 'MOVE_Z':
+          if (!params?.steps) {
+            return res.status(400).json({
+              success: false,
+              error: 'Parámetro steps requerido para MOVE_Z'
+            });
+          }
+          result = await this.arduinoController.moveAxisZ(params.steps);
+          break;
+        case 'STOP':
+          result = await this.arduinoController.emergencyStop();
+          break;
+        default:
+          return res.status(400).json({
+            success: false,
+            error: 'Comando desconocido'
+          });
+      }
+
+      logger.info('Comando Arduino ejecutado', { command, params });
+
+      res.json({
+        success: true,
+        message: 'Comando ejecutado',
+        result: result
+      });
+    } catch (error) {
+      logger.error('Error ejecutando comando Arduino:', error);
+      res.status(500).json({
+        success: false,
+        error: error.message
+      });
+    }
+  }
+
+  async getFlashInfo(req, res) {
+    // Funcionalidad de flash no disponible - flasher module no incluido
+    res.json({
+      success: false,
+      message: 'Funcionalidad de flash automático no disponible. Flashea el Arduino manualmente usando Arduino IDE.',
+      flashSystem: {
+        available: false,
+        arduinoCliInstalled: false
+      }
+    });
+  }
+
+  async flashArduino(req, res) {
+    // Funcionalidad de flash no disponible - flasher module no incluido
+    logger.warn('Intento de flashear Arduino - funcionalidad no disponible');
+    
+    res.status(501).json({
+      success: false,
+      message: 'Funcionalidad de flash automático no disponible.',
+      instructions: 'Para flashear el Arduino manualmente: 1) Abre Arduino IDE, 2) Abre src/arduino/arduino-sketch/SILAR_Control.ino, 3) Selecciona tu placa, 4) Haz clic en Upload'
+    });
+  }
+
+  async verifyFirmware(req, res) {
+    // Funcionalidad de verificación no disponible - flasher module no incluido
+    res.json({
+      success: false,
+      message: 'Funcionalidad de verificación automática no disponible. Verifica manualmente que el Arduino responda correctamente.',
+      hasCorrectFirmware: null
+    });
+  }
+
+  delay(ms) {
+    return new Promise(resolve => setTimeout(resolve, ms));
   }
 
   async startProcess(req, res) {
@@ -609,6 +900,15 @@ class SilarWebServer {
 
   async initialize() {
     await this.initDatabase();
+    
+    // Intentar conectar con Arduino automáticamente
+    try {
+      await this.arduinoController.connect();
+      logger.info('Arduino conectado automáticamente');
+    } catch (error) {
+      logger.warn('Arduino no disponible al inicio. Se puede conectar manualmente desde la interfaz.', { error: error.message });
+    }
+    
     logger.systemStart();
   }
 }

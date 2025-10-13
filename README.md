@@ -2,6 +2,18 @@
 
 Sistema de control para procesos químicos SILAR (Successive Ionic Layer Adsorption and Reaction) desarrollado por DORA Lab.
 
+## ⚡ Integración Arduino Completa
+
+✅ **Nuevo**: Sistema de control Arduino totalmente integrado con flash automático del firmware.
+
+- 🎮 **Control completo** de motores stepper (ejes Y y Z)
+- 🚀 **Flash automático** del firmware desde la aplicación
+- 🌐 **API REST + WebSocket** para control en tiempo real
+- 📦 **Incluido en el empaquetado** (sin necesidad de Arduino IDE)
+- 📚 **Documentación completa** en `src/arduino/`
+
+**→ [Ver Guía de Integración Arduino](./docs/arduino/integration-summary.md)**
+
 ## 🚨 Problema de Conexión Solucionado
 
 Si experimentas problemas de conexión entre el frontend y backend, sigue estos pasos:
@@ -57,13 +69,24 @@ SILARDORALAB/
 ├── database/
 │   └── schema.sql             # Esquema de base de datos
 ├── src/
+│   ├── arduino/              # 🆕 INTEGRACIÓN ARDUINO
+│   │   ├── ArduinoController.js      # Controlador principal
+│   │   ├── arduino-sketch/           # Código Arduino (.ino)
+│   │   ├── flasher/                  # Sistema de flash automático
+│   │   ├── examples/                 # Ejemplos de uso
+│   │   ├── README.md                 # Documentación completa
+│   │   └── QUICK_START.md           # Inicio rápido
 │   ├── public/               # Frontend
 │   │   ├── js/
+│   │   │   └── screens/
+│   │   │       ├── manual.js         # Control manual Arduino
+│   │   │       └── process.js        # Control de procesos
 │   │   ├── css/
 │   │   └── index.html
 │   └── utils/                # Utilidades del backend
-├── server.js                 # Servidor principal
-└── setup-database.bat        # Configuración de base de datos
+├── server.js                 # Servidor principal (con API Arduino)
+├── setup-database.bat        # Configuración de base de datos
+└── ARDUINO_INTEGRATION_SUMMARY.md  # 🆕 Resumen integración
 ```
 
 ## 🚀 Inicio Rápido
@@ -73,10 +96,14 @@ SILARDORALAB/
 # 1. Configurar base de datos
 setup-database.bat
 
-# 2. Iniciar servidor
-node server.js
+# 2. Flashear Arduino (solo primera vez)
+npm run flash-arduino
 
-# 3. Abrir en navegador
+# 3. Iniciar servidor
+node server.js
+# O usar: npm run web
+
+# 4. Abrir en navegador
 http://localhost:3000
 ```
 
@@ -111,19 +138,79 @@ npm run build
 
 ### Indicadores de Estado:
 
-- 🟢 **Arduino**: Conectado al hardware
+- 🟢 **Arduino**: Conectado al hardware (ver en Control Manual)
 - 🟢 **MySQL**: Base de datos activa
 - 🟢 **WebSocket**: Comunicación en tiempo real
 
-## 🛠️ Modo Desarrollo
+### Arduino no conecta:
 
-El sistema incluye un modo demo para desarrollo sin hardware:
+1. **Flashear el Arduino**: `npm run flash-arduino`
+2. **Verificar puerto USB**: Revisar en Administrador de Dispositivos
+3. **Cerrar Arduino IDE**: Si está abierto, cerrarlo
+4. **Ver logs**: `logs/silar-system.log`
+5. **Documentación completa**: Ver `src/arduino/README.md`
+
+## 🛠️ Comandos Disponibles
 
 ```bash
-set DEMO_MODE=true
-set MOCK_ARDUINO=true
-node server.js
+# Servidor web
+npm run web              # Iniciar servidor Express
+
+# Arduino
+npm run flash-arduino    # Flashear firmware en Arduino
+npm run arduino-test     # Probar conexión Arduino
+npm run arduino-cli-install  # Instalar Arduino CLI manualmente
+
+# Base de datos
+npm run setup-db         # Configurar base de datos
+npm run update-db        # Actualizar esquema
+
+# Electron
+npm run dev              # Desarrollo con Electron
+npm run build            # Empaquetar aplicación
+
+# Otros
+npm run lint             # Linter
+npm test                 # Tests
 ```
+
+## 🎮 Control del Arduino
+
+El sistema incluye control completo del Arduino:
+
+### Desde la Interfaz Web:
+1. Ve a **Control Manual** en el menú
+2. Verifica el estado de conexión
+3. Usa los botones para controlar los ejes
+
+### Desde la API REST:
+```bash
+# Listar puertos disponibles
+curl http://localhost:3000/api/arduino/ports
+
+# Conectar Arduino
+curl -X POST http://localhost:3000/api/arduino/connect \
+  -H "Content-Type: application/json" \
+  -d '{"port": "COM3"}'
+
+# Ejecutar HOME
+curl -X POST http://localhost:3000/api/arduino/command \
+  -H "Content-Type: application/json" \
+  -d '{"command": "HOME"}'
+
+# Mover eje Y
+curl -X POST http://localhost:3000/api/arduino/command \
+  -H "Content-Type: application/json" \
+  -d '{"command": "MOVE_Y", "params": {"steps": 1000}}'
+```
+
+### Documentación Arduino:
+- **📚 Índice de Documentación**: [docs/README.md](./docs/README.md)
+- **Resumen ejecutivo**: [docs/arduino/integration-summary.md](./docs/arduino/integration-summary.md)
+- **Guía rápida**: [docs/arduino/quick-start.md](./docs/arduino/quick-start.md)
+- **Documentación completa**: [docs/arduino/README.md](./docs/arduino/README.md)
+- **Arquitectura**: [docs/arduino/architecture.md](./docs/arduino/architecture.md)
+- **API Reference**: [docs/api/arduino-api.md](./docs/api/arduino-api.md)
 
 ## 📝 Logs y Debugging
 

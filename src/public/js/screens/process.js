@@ -161,7 +161,6 @@ class ProcessScreen {
     showTimer() {
         const timerElement = document.getElementById('process-timer');
         if (timerElement) {
-            // Configurar estilos para el cronómetro centrado
             timerElement.style.display = 'flex';
             timerElement.style.justifyContent = 'center';
             timerElement.style.alignItems = 'center';
@@ -179,7 +178,6 @@ class ProcessScreen {
             timerElement.style.boxShadow = '0 10px 30px rgba(0, 0, 0, 0.5)';
             timerElement.style.transition = 'all 0.3s ease';
             
-            // Agregar clase para animaciones
             timerElement.classList.add('timer-active');
         }
     }

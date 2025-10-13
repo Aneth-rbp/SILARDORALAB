@@ -13,7 +13,10 @@
     "clean": "rm -rf node_modules package-lock.json",
     "install-deps": "npm install",
     "lint": "eslint src/",
-    "test": "echo \"No tests specified\" && exit 0"
+    "test": "echo \"No tests specified\" && exit 0",
+    "flash-arduino": "node src/arduino/flasher/flash-arduino.js",
+    "arduino-test": "node src/arduino/examples/integration-test.js",
+    "arduino-cli-install": "src\\arduino\\flasher\\install-arduino-cli.bat"
   },
   "keywords": [
     "silar",
