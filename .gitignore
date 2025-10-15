@@ -1,3 +1,12 @@
 # Dependencies
 node_modules/
 logs/
+dist/
+build/
+.angular/
+.nx/
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
