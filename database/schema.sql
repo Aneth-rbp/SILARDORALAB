@@ -3,18 +3,22 @@
 -- Base de datos local MySQL para el sistema SILAR
 -- =====================================================
 
-CREATE DATABASE IF NOT EXISTS silar_db;
+CREATE DATABASE IF NOT EXISTS silar_db CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 USE silar_db;
+
+-- Asegurar UTF-8 en la conexión
+SET NAMES 'utf8mb4' COLLATE 'utf8mb4_unicode_ci';
+SET CHARACTER SET utf8mb4;
 
 -- =====================================================
 -- Tabla de Usuarios
 -- =====================================================
 CREATE TABLE IF NOT EXISTS users (
     id INT PRIMARY KEY AUTO_INCREMENT,
-    username VARCHAR(50) NOT NULL UNIQUE,
-    password VARCHAR(255) NOT NULL,
-    full_name VARCHAR(100) NOT NULL,
-    email VARCHAR(100),
+    username VARCHAR(50) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL UNIQUE,
+    password VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL,
+    full_name VARCHAR(100) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL,
+    email VARCHAR(100) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci,
     role ENUM('admin', 'usuario') DEFAULT 'usuario',
     is_active BOOLEAN DEFAULT true,
     last_login TIMESTAMP NULL,
@@ -31,8 +35,8 @@ CREATE TABLE IF NOT EXISTS users (
 -- =====================================================
 CREATE TABLE IF NOT EXISTS recipes (
     id INT PRIMARY KEY AUTO_INCREMENT,
-    name VARCHAR(255) NOT NULL,
-    description TEXT,
+    name VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL,
+    description TEXT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci,
     type ENUM('A', 'B', 'C', 'D') DEFAULT 'A',
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
@@ -61,6 +65,37 @@ CREATE TABLE IF NOT EXISTS recipe_parameters (
     accel_y DECIMAL(8,2) DEFAULT 0.0 COMMENT 'Aceleración Motor Y en rpm/s',
     humidity_offset DECIMAL(5,2) DEFAULT 0.0 COMMENT 'Offset de humedad en %',
     temperature_offset DECIMAL(5,2) DEFAULT 0.0 COMMENT 'Offset de temperatura en °C',
+    -- Tiempos de inmersión (en milisegundos)
+    dipping_wait0 INT DEFAULT 0 COMMENT 'Tiempo de inmersión 1 (ms)',
+    dipping_wait1 INT DEFAULT 0 COMMENT 'Tiempo de inmersión 2 (ms)',
+    dipping_wait2 INT DEFAULT 0 COMMENT 'Tiempo de inmersión 3 (ms)',
+    dipping_wait3 INT DEFAULT 0 COMMENT 'Tiempo de inmersión 4 (ms)',
+    transfer_wait INT DEFAULT 0 COMMENT 'Tiempo de espera para cambio de posición en Y (ms)',
+    -- Parámetros de proceso
+    cycles INT DEFAULT 1 COMMENT 'Cantidad de ciclos por prueba',
+    fan BOOLEAN DEFAULT false COMMENT 'Ventilador encendido/apagado',
+    except_dripping1 BOOLEAN DEFAULT false COMMENT 'Excluir inmersión en Y1',
+    except_dripping2 BOOLEAN DEFAULT false COMMENT 'Excluir inmersión en Y2',
+    except_dripping3 BOOLEAN DEFAULT false COMMENT 'Excluir inmersión en Y3',
+    except_dripping4 BOOLEAN DEFAULT false COMMENT 'Excluir inmersión en Y4',
+    -- Posiciones (opcional)
+    dip_start_position DECIMAL(8,2) DEFAULT 0.0 COMMENT 'Posición inicial Z con sustrato',
+    dipping_length DECIMAL(8,2) DEFAULT 0.0 COMMENT 'Longitud de inmersión de sustrato',
+    transfer_speed DECIMAL(8,2) DEFAULT 0.0 COMMENT 'Velocidad Y cambio de solución',
+    dip_speed DECIMAL(8,2) DEFAULT 0.0 COMMENT 'Velocidad Z inmersión sustrato a solución',
+    -- Variables Pendiente (COMENTADAS - No implementadas aún)
+    -- set_temp1 DECIMAL(5,2) DEFAULT 0.0 COMMENT '*Pendiente* Configura la temperatura deseada en la parrilla 1',
+    -- set_temp2 DECIMAL(5,2) DEFAULT 0.0 COMMENT '*Pendiente* Configura la temperatura deseada en la parrilla 2',
+    -- set_temp3 DECIMAL(5,2) DEFAULT 0.0 COMMENT '*Pendiente* Configura la temperatura deseada en la parrilla 3',
+    -- set_temp4 DECIMAL(5,2) DEFAULT 0.0 COMMENT '*Pendiente* Configura la temperatura deseada en la parrilla 4',
+    -- set_stirr1 DECIMAL(8,2) DEFAULT 0.0 COMMENT '*Pendiente* Configura la velocidad del removedor en la parrilla 1',
+    -- set_stirr2 DECIMAL(8,2) DEFAULT 0.0 COMMENT '*Pendiente* Configura la velocidad del removedor en la parrilla 2',
+    -- set_stirr3 DECIMAL(8,2) DEFAULT 0.0 COMMENT '*Pendiente* Configura la velocidad del removedor en la parrilla 3',
+    -- set_stirr4 DECIMAL(8,2) DEFAULT 0.0 COMMENT '*Pendiente* Configura la velocidad del removedor en la parrilla 4',
+    -- meas_temp1 DECIMAL(5,2) DEFAULT 0.0 COMMENT '*Pendiente* Lectura de temperatura de la solución 1',
+    -- meas_temp2 DECIMAL(5,2) DEFAULT 0.0 COMMENT '*Pendiente* Lectura de temperatura de la solución 2',
+    -- meas_temp3 DECIMAL(5,2) DEFAULT 0.0 COMMENT '*Pendiente* Lectura de temperatura de la solución 3',
+    -- meas_temp4 DECIMAL(5,2) DEFAULT 0.0 COMMENT '*Pendiente* Lectura de temperatura de la solución 4',
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     
@@ -200,7 +235,16 @@ INSERT INTO system_config (config_key, config_value, config_type, description, c
 -- Configuración de Monitoreo
 ('data_logging_enabled', 'true', 'boolean', 'Activar registro de datos', 'monitoring'),
 ('log_retention_days', '30', 'number', 'Días de retención de logs', 'monitoring'),
-('variable_update_interval', '1000', 'number', 'Intervalo de actualización de variables en ms', 'monitoring')
+('variable_update_interval', '1000', 'number', 'Intervalo de actualización de variables en ms', 'monitoring'),
+
+-- Configuración de Parámetros del Sistema (Panel de Administración)
+('report_path', 'C:\\SILAR\\Reportes', 'string', 'Dirección para guardar reportes', 'system'),
+('max_velocity_y', '1000', 'number', 'Velocidad máxima del eje Y en rpm', 'motion'),
+('max_velocity_z', '1000', 'number', 'Velocidad máxima del eje Z en rpm', 'motion'),
+('max_accel_y', '100', 'number', 'Aceleración máxima del eje Y en rpm/s', 'motion'),
+('max_accel_z', '100', 'number', 'Aceleración máxima del eje Z en rpm/s', 'motion'),
+('humidity_offset', '0', 'number', 'Offset de calibración del sensor de humedad en %', 'sensors'),
+('temperature_offset', '0', 'number', 'Offset de calibración del sensor de temperatura en °C', 'sensors')
 
 ON DUPLICATE KEY UPDATE config_value = VALUES(config_value);
 
@@ -227,11 +271,14 @@ ON DUPLICATE KEY UPDATE name = VALUES(name);
 -- =====================================================
 -- Insertar Parámetros de Recetas de Ejemplo
 -- =====================================================
-INSERT INTO recipe_parameters (recipe_id, duration, temperature, velocity_x, velocity_y, accel_x, accel_y, humidity_offset, temperature_offset) VALUES
-(1, 60, 25.0, 100.0, 100.0, 10.0, 10.0, 0.0, 0.0),
-(2, 30, 30.0, 150.0, 150.0, 15.0, 15.0, 2.0, 1.0),
-(3, 120, 20.0, 50.0, 50.0, 5.0, 5.0, -1.0, -0.5),
-(4, 90, 28.0, 120.0, 80.0, 12.0, 8.0, 1.5, 0.5)
+INSERT INTO recipe_parameters (recipe_id, duration, temperature, velocity_x, velocity_y, accel_x, accel_y, humidity_offset, temperature_offset,
+    dipping_wait0, dipping_wait1, dipping_wait2, dipping_wait3, transfer_wait,
+    cycles, fan, except_dripping1, except_dripping2, except_dripping3, except_dripping4,
+    dip_start_position, dipping_length, transfer_speed, dip_speed) VALUES
+(1, 60, 25.0, 100.0, 100.0, 10.0, 10.0, 0.0, 0.0, 5000, 5000, 5000, 5000, 2000, 10, false, false, false, false, false, 0.0, 50.0, 10.0, 5.0),
+(2, 30, 30.0, 150.0, 150.0, 15.0, 15.0, 2.0, 1.0, 3000, 3000, 3000, 3000, 1500, 5, true, false, false, false, false, 0.0, 40.0, 15.0, 7.0),
+(3, 120, 20.0, 50.0, 50.0, 5.0, 5.0, -1.0, -0.5, 10000, 10000, 10000, 10000, 3000, 20, false, true, false, false, false, 0.0, 60.0, 5.0, 3.0),
+(4, 90, 28.0, 120.0, 80.0, 12.0, 8.0, 1.5, 0.5, 7000, 7000, 7000, 7000, 2500, 15, true, false, true, false, false, 0.0, 45.0, 12.0, 6.0)
 ON DUPLICATE KEY UPDATE 
     duration = VALUES(duration),
     temperature = VALUES(temperature),
@@ -240,7 +287,22 @@ ON DUPLICATE KEY UPDATE
     accel_x = VALUES(accel_x),
     accel_y = VALUES(accel_y),
     humidity_offset = VALUES(humidity_offset),
-    temperature_offset = VALUES(temperature_offset);
+    temperature_offset = VALUES(temperature_offset),
+    dipping_wait0 = VALUES(dipping_wait0),
+    dipping_wait1 = VALUES(dipping_wait1),
+    dipping_wait2 = VALUES(dipping_wait2),
+    dipping_wait3 = VALUES(dipping_wait3),
+    transfer_wait = VALUES(transfer_wait),
+    cycles = VALUES(cycles),
+    fan = VALUES(fan),
+    except_dripping1 = VALUES(except_dripping1),
+    except_dripping2 = VALUES(except_dripping2),
+    except_dripping3 = VALUES(except_dripping3),
+    except_dripping4 = VALUES(except_dripping4),
+    dip_start_position = VALUES(dip_start_position),
+    dipping_length = VALUES(dipping_length),
+    transfer_speed = VALUES(transfer_speed),
+    dip_speed = VALUES(dip_speed);
 
 -- =====================================================
 -- Crear Vistas para Consultas Comunes

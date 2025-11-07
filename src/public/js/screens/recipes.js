@@ -9,6 +9,9 @@ class RecipesScreen {
         this.recipes = [];
         this.selectedRecipe = null;
         this.currentUser = this.app.userSession;
+        this.systemConfig = null; // Configuraciones del sistema (límites y defaults)
+        this.processStatus = null; // Estado del proceso actual
+        this.processStatusCheckInterval = null; // Intervalo para verificar estado del proceso
         this.init();
     }
 
@@ -33,8 +36,90 @@ class RecipesScreen {
     }
 
     async init() {
+        await this.loadSystemConfig();
         await this.loadRecipes();
         this.bindEvents();
+        await this.checkProcessStatus();
+        // Verificar estado del proceso cada 5 segundos
+        this.startProcessStatusMonitoring();
+        
+        // Escuchar eventos de cambio de estado del proceso
+        document.addEventListener('process-status-changed', () => {
+            this.checkProcessStatus();
+        });
+    }
+
+    /**
+     * Carga las configuraciones del sistema para usar como límites y valores por defecto
+     */
+    async loadSystemConfig() {
+        try {
+            // Intentar cargar límites (endpoint público para todos los usuarios autenticados)
+            const response = await this.app.apiCall('/config/limits');
+            if (response.success && response.limits) {
+                this.systemConfig = response.limits;
+            } else {
+                throw new Error('No se pudieron cargar los límites');
+            }
+        } catch (error) {
+            // Si no se puede cargar, usar valores por defecto
+            console.warn('No se pudieron cargar las configuraciones del sistema, usando valores por defecto');
+            this.systemConfig = {
+                max_velocity_y: 1000,
+                max_velocity_z: 1000,
+                max_accel_y: 100,
+                max_accel_z: 100,
+                humidity_offset: 0,
+                temperature_offset: 0
+            };
+        }
+    }
+
+    /**
+     * Verifica el estado actual del proceso
+     */
+    async checkProcessStatus() {
+        try {
+            const result = await this.app.apiCall('/process/status', {
+                method: 'GET'
+            });
+            
+            if (result && result.success) {
+                this.processStatus = result.status || 'stopped';
+                // Actualizar botones según el estado del proceso
+                this.updateActionButtons();
+            }
+        } catch (error) {
+            console.error('Error verificando estado del proceso:', error);
+            // Si hay error, asumir que no hay proceso ejecutándose
+            this.processStatus = 'stopped';
+            this.updateActionButtons();
+        }
+    }
+
+    /**
+     * Inicia el monitoreo periódico del estado del proceso
+     */
+    startProcessStatusMonitoring() {
+        // Limpiar intervalo anterior si existe
+        if (this.processStatusCheckInterval) {
+            clearInterval(this.processStatusCheckInterval);
+        }
+        
+        // Verificar cada 5 segundos
+        this.processStatusCheckInterval = setInterval(() => {
+            this.checkProcessStatus();
+        }, 5000);
+    }
+
+    /**
+     * Detiene el monitoreo del estado del proceso
+     */
+    stopProcessStatusMonitoring() {
+        if (this.processStatusCheckInterval) {
+            clearInterval(this.processStatusCheckInterval);
+            this.processStatusCheckInterval = null;
+        }
     }
 
     bindEvents() {
@@ -113,8 +198,14 @@ class RecipesScreen {
     }
 
     async loadRecipes() {
+        const container = document.getElementById('recipes-list');
+        
         try {
-            this.recipes = await this.app.apiCall('/recipes');
+            const response = await this.app.apiCall('/recipes');
+            
+            // Asegurarse de que siempre sea un array
+            this.recipes = Array.isArray(response) ? response : [];
+            
             console.log('Recetas cargadas:', this.recipes.length);
             if (this.recipes.length > 0) {
                 console.log('Primera receta cargada:', {
@@ -123,9 +214,28 @@ class RecipesScreen {
                     parameters: this.recipes[0].parameters
                 });
             }
+            
             this.renderRecipesList();
         } catch (error) {
             console.error('Error loading recipes:', error);
+            this.recipes = []; // Asegurar que sea un array vacío en caso de error
+            
+            // Ocultar el estado de carga y mostrar mensaje de error
+            if (container) {
+                container.innerHTML = `
+                    <div class="empty-state">
+                        <div class="empty-icon">
+                            <i class="bi bi-exclamation-triangle text-danger"></i>
+                        </div>
+                        <h4>Error al cargar las recetas</h4>
+                        <p>No se pudieron cargar las recetas. Por favor, intente nuevamente.</p>
+                        <button class="btn btn-primary" onclick="window.silarApp.navigateToScreen('recipes')">
+                            <i class="bi bi-arrow-clockwise me-2"></i>Reintentar
+                        </button>
+                    </div>
+                `;
+            }
+            
             this.app.showError('Error cargando las recetas');
         }
     }
@@ -133,6 +243,11 @@ class RecipesScreen {
     renderRecipesList() {
         const container = document.getElementById('recipes-list');
         if (!container) return;
+
+        // Asegurarse de que recipes sea un array
+        if (!Array.isArray(this.recipes)) {
+            this.recipes = [];
+        }
 
         if (this.recipes.length === 0) {
             container.innerHTML = `
@@ -150,35 +265,46 @@ class RecipesScreen {
             return;
         }
 
-        const recipesHtml = this.recipes.map(recipe => {
+        // Limpiar el contenedor
+        container.innerHTML = '';
+        
+        // Crear elementos DOM en lugar de usar innerHTML para preservar UTF-8
+        this.recipes.forEach(recipe => {
             const creatorBadgeColor = this.getCreatorBadgeColor(recipe.creator_role);
             const userCanEdit = this.canUserEditRecipe(recipe);
             const isSelected = this.selectedRecipe?.id === recipe.id;
             
-            return `
-                <div class="recipe-card compact ${isSelected ? 'selected' : ''}" data-recipe-id="${recipe.id}">
-                    <div class="recipe-header">
-                        <div class="recipe-name-main">${recipe.name}</div>
-                        <div class="recipe-type-badge">${recipe.type || 'A'}</div>
+            const card = document.createElement('div');
+            card.className = `recipe-card compact ${isSelected ? 'selected' : ''}`;
+            card.setAttribute('data-recipe-id', recipe.id);
+            
+            card.innerHTML = `
+                <div class="recipe-header">
+                    <div class="recipe-name-main"></div>
+                    <div class="recipe-type-badge"></div>
+                </div>
+                <div class="recipe-description"></div>
+                <div class="recipe-meta-info">
+                    <div class="creator-info">
+                        <i class="bi bi-person-circle"></i>
+                        <span></span>
                     </div>
-                    <div class="recipe-description">
-                        ${recipe.description || 'Sin descripción'}
-                    </div>
-                    <div class="recipe-meta-info">
-                        <div class="creator-info">
-                            <i class="bi bi-person-circle"></i>
-                            <span>${recipe.created_by_name}</span>
-                        </div>
-                        <div class="date-info">
-                            <i class="bi bi-calendar"></i>
-                            <span>${new Date(recipe.created_at).toLocaleDateString('es-ES')}</span>
-                        </div>
+                    <div class="date-info">
+                        <i class="bi bi-calendar"></i>
+                        <span></span>
                     </div>
                 </div>
             `;
-        }).join('');
-
-        container.innerHTML = recipesHtml;
+            
+            // Usar textContent para preservar UTF-8 correctamente
+            card.querySelector('.recipe-name-main').textContent = recipe.name || '';
+            card.querySelector('.recipe-type-badge').textContent = recipe.type || 'A';
+            card.querySelector('.recipe-description').textContent = recipe.description || 'Sin descripción';
+            card.querySelector('.creator-info span').textContent = recipe.created_by_name || '';
+            card.querySelector('.date-info span').textContent = new Date(recipe.created_at).toLocaleDateString('es-ES');
+            
+            container.appendChild(card);
+        });
     }
 
     selectRecipe(recipeId) {
@@ -277,6 +403,47 @@ class RecipesScreen {
                             <span class="param-label">Offset Temp.</span>
                             <span class="param-value">${params.temperatureOffset || '--'} °C</span>
                         </div>
+                        <!-- Tiempos de Inmersión -->
+                        <div class="param-item">
+                            <span class="param-label">Tiempo Inmersión 1</span>
+                            <span class="param-value">${params.dippingWait0 || '--'} ms</span>
+                        </div>
+                        <div class="param-item">
+                            <span class="param-label">Tiempo Inmersión 2</span>
+                            <span class="param-value">${params.dippingWait1 || '--'} ms</span>
+                        </div>
+                        <div class="param-item">
+                            <span class="param-label">Tiempo Inmersión 3</span>
+                            <span class="param-value">${params.dippingWait2 || '--'} ms</span>
+                        </div>
+                        <div class="param-item">
+                            <span class="param-label">Tiempo Inmersión 4</span>
+                            <span class="param-value">${params.dippingWait3 || '--'} ms</span>
+                        </div>
+                        <div class="param-item">
+                            <span class="param-label">Tiempo Transferencia Y</span>
+                            <span class="param-value">${params.transferWait || '--'} ms</span>
+                        </div>
+                        <!-- Parámetros de Proceso -->
+                        <div class="param-item">
+                            <span class="param-label">Ciclos</span>
+                            <span class="param-value">${params.cycles || '--'}</span>
+                        </div>
+                        <div class="param-item">
+                            <span class="param-label">Ventilador</span>
+                            <span class="param-value">${params.fan ? 'Activado' : 'Desactivado'}</span>
+                        </div>
+                        <div class="param-item">
+                            <span class="param-label">Excluir Inmersiones</span>
+                            <span class="param-value">
+                                ${[
+                                    params.exceptDripping1 ? 'Y1' : '',
+                                    params.exceptDripping2 ? 'Y2' : '',
+                                    params.exceptDripping3 ? 'Y3' : '',
+                                    params.exceptDripping4 ? 'Y4' : ''
+                                ].filter(x => x).join(', ') || 'Ninguna'}
+                            </span>
+                        </div>
                     </div>
 
             
@@ -293,15 +460,24 @@ class RecipesScreen {
         const deleteBtn = document.getElementById('delete-recipe-btn');
 
         const hasSelection = !!this.selectedRecipe;
+        const hasRunningProcess = this.processStatus === 'running' || this.processStatus === 'paused';
 
         if (executeBtn) {
-            executeBtn.disabled = !hasSelection;
-            if (hasSelection) {
+            // Deshabilitar si no hay selección O si hay un proceso ejecutándose
+            executeBtn.disabled = !hasSelection || hasRunningProcess;
+            
+            if (hasSelection && !hasRunningProcess) {
                 executeBtn.classList.remove('btn-secondary');
                 executeBtn.classList.add('btn-execute');
+                executeBtn.title = 'Ejecutar receta';
             } else {
                 executeBtn.classList.remove('btn-execute');
                 executeBtn.classList.add('btn-secondary');
+                if (hasRunningProcess) {
+                    executeBtn.title = 'Hay un proceso ejecutándose. Debe detenerlo antes de iniciar otro.';
+                } else {
+                    executeBtn.title = 'Seleccione una receta para ejecutar';
+                }
             }
         }
         
@@ -340,35 +516,160 @@ class RecipesScreen {
         const form = document.getElementById('recipe-form');
         if (!form) return;
 
+        // Obtener configuraciones del sistema (límites y defaults)
+        const config = this.systemConfig || {};
+        const maxVelocityY = config.max_velocity_y || 1000;
+        const maxVelocityZ = config.max_velocity_z || 1000;
+        const maxAccelY = config.max_accel_y || 100;
+        const maxAccelZ = config.max_accel_z || 100;
+        const defaultHumidityOffset = config.humidity_offset || 0;
+        const defaultTempOffset = config.temperature_offset || 0;
+
         if (recipe) {
             // Edit mode
+            const params = recipe.parameters || {};
             form.querySelector('#recipe-name').value = recipe.name || '';
             form.querySelector('#recipe-type').value = recipe.type || 'A';
             form.querySelector('#recipe-description').value = recipe.description || '';
-            form.querySelector('#recipe-duration').value = recipe.parameters?.duration || '';
-            form.querySelector('#recipe-temperature').value = recipe.parameters?.temperature || '';
-            form.querySelector('#recipe-velocity-x').value = recipe.parameters?.velocityX || '';
-            form.querySelector('#recipe-velocity-y').value = recipe.parameters?.velocityY || '';
-            form.querySelector('#recipe-accel-x').value = recipe.parameters?.accelX || '';
-            form.querySelector('#recipe-accel-y').value = recipe.parameters?.accelY || '';
-            form.querySelector('#recipe-humidity-offset').value = recipe.parameters?.humidityOffset || '';
-            form.querySelector('#recipe-temp-offset').value = recipe.parameters?.temperatureOffset || '';
+            form.querySelector('#recipe-duration').value = params.duration || '';
+            form.querySelector('#recipe-temperature').value = params.temperature || '';
+            form.querySelector('#recipe-velocity-x').value = params.velocityX || '';
+            form.querySelector('#recipe-velocity-y').value = params.velocityY || '';
+            form.querySelector('#recipe-accel-x').value = params.accelX || '';
+            form.querySelector('#recipe-accel-y').value = params.accelY || '';
+            form.querySelector('#recipe-humidity-offset').value = params.humidityOffset || '';
+            form.querySelector('#recipe-temp-offset').value = params.temperatureOffset || '';
+            // Tiempos de inmersión
+            form.querySelector('#recipe-dipping-wait0').value = params.dippingWait0 || '';
+            form.querySelector('#recipe-dipping-wait1').value = params.dippingWait1 || '';
+            form.querySelector('#recipe-dipping-wait2').value = params.dippingWait2 || '';
+            form.querySelector('#recipe-dipping-wait3').value = params.dippingWait3 || '';
+            form.querySelector('#recipe-transfer-wait').value = params.transferWait || '';
+            // Parámetros de proceso
+            form.querySelector('#recipe-cycles').value = params.cycles || 1;
+            form.querySelector('#recipe-fan').value = params.fan ? 'true' : 'false';
+            form.querySelector('#recipe-except-dripping1').checked = params.exceptDripping1 || false;
+            form.querySelector('#recipe-except-dripping2').checked = params.exceptDripping2 || false;
+            form.querySelector('#recipe-except-dripping3').checked = params.exceptDripping3 || false;
+            form.querySelector('#recipe-except-dripping4').checked = params.exceptDripping4 || false;
+            // Posiciones
+            form.querySelector('#recipe-dip-start-position').value = params.dipStartPosition || '';
+            form.querySelector('#recipe-dipping-length').value = params.dippingLength || '';
+            form.querySelector('#recipe-transfer-speed').value = params.transferSpeed || '';
+            form.querySelector('#recipe-dip-speed').value = params.dipSpeed || '';
             
             document.getElementById('recipe-form-title').textContent = 'Editar Receta';
             document.getElementById('save-recipe-btn').textContent = 'Actualizar Receta';
             
 
         } else {
-            // New mode
+            // New mode - usar valores por defecto de configuración
             form.reset();
             form.querySelector('#recipe-type').value = 'A';
+            
+            // Aplicar valores por defecto de offsets
+            form.querySelector('#recipe-humidity-offset').value = defaultHumidityOffset;
+            form.querySelector('#recipe-temp-offset').value = defaultTempOffset;
+            
             document.getElementById('recipe-form-title').textContent = 'Nueva Receta';
             document.getElementById('save-recipe-btn').textContent = 'Guardar Receta';
         }
 
+        // Aplicar límites máximos a los campos
+        const velocityYInput = form.querySelector('#recipe-velocity-y');
+        const velocityZInput = form.querySelector('#recipe-transfer-speed'); // Velocidad Z
+        const accelYInput = form.querySelector('#recipe-accel-y');
+        const accelZInput = form.querySelector('#recipe-dip-speed'); // Aceleración Z (velocidad de inmersión)
+
+        if (velocityYInput) {
+            velocityYInput.setAttribute('max', maxVelocityY);
+            velocityYInput.setAttribute('title', `Máximo: ${maxVelocityY} rpm`);
+        }
+        if (velocityZInput) {
+            velocityZInput.setAttribute('max', maxVelocityZ);
+            velocityZInput.setAttribute('title', `Máximo: ${maxVelocityZ} rpm`);
+        }
+        if (accelYInput) {
+            accelYInput.setAttribute('max', maxAccelY);
+            accelYInput.setAttribute('title', `Máximo: ${maxAccelY} rpm/s`);
+        }
+        if (accelZInput) {
+            accelZInput.setAttribute('max', maxAccelZ);
+            accelZInput.setAttribute('title', `Máximo: ${maxAccelZ} rpm/s`);
+        }
+
+        // Agregar validación en tiempo real
+        this.setupFormValidation(form, maxVelocityY, maxVelocityZ, maxAccelY, maxAccelZ);
+
         // Bind save event
         const saveBtn = document.getElementById('save-recipe-btn');
         saveBtn.onclick = () => this.saveRecipe(recipe?.id);
+    }
+
+    /**
+     * Configura validación en tiempo real para los campos del formulario
+     */
+    setupFormValidation(form, maxVelocityY, maxVelocityZ, maxAccelY, maxAccelZ) {
+        const velocityYInput = form.querySelector('#recipe-velocity-y');
+        const velocityZInput = form.querySelector('#recipe-transfer-speed');
+        const accelYInput = form.querySelector('#recipe-accel-y');
+        const accelZInput = form.querySelector('#recipe-dip-speed');
+
+        // Validar velocidad Y
+        if (velocityYInput) {
+            velocityYInput.addEventListener('input', (e) => {
+                const value = parseFloat(e.target.value) || 0;
+                if (value > maxVelocityY) {
+                    e.target.classList.add('is-invalid');
+                    e.target.setCustomValidity(`El valor máximo permitido es ${maxVelocityY} rpm`);
+                } else {
+                    e.target.classList.remove('is-invalid');
+                    e.target.setCustomValidity('');
+                }
+            });
+        }
+
+        // Validar velocidad Z
+        if (velocityZInput) {
+            velocityZInput.addEventListener('input', (e) => {
+                const value = parseFloat(e.target.value) || 0;
+                if (value > maxVelocityZ) {
+                    e.target.classList.add('is-invalid');
+                    e.target.setCustomValidity(`El valor máximo permitido es ${maxVelocityZ} rpm`);
+                } else {
+                    e.target.classList.remove('is-invalid');
+                    e.target.setCustomValidity('');
+                }
+            });
+        }
+
+        // Validar aceleración Y
+        if (accelYInput) {
+            accelYInput.addEventListener('input', (e) => {
+                const value = parseFloat(e.target.value) || 0;
+                if (value > maxAccelY) {
+                    e.target.classList.add('is-invalid');
+                    e.target.setCustomValidity(`El valor máximo permitido es ${maxAccelY} rpm/s`);
+                } else {
+                    e.target.classList.remove('is-invalid');
+                    e.target.setCustomValidity('');
+                }
+            });
+        }
+
+        // Validar aceleración Z
+        if (accelZInput) {
+            accelZInput.addEventListener('input', (e) => {
+                const value = parseFloat(e.target.value) || 0;
+                if (value > maxAccelZ) {
+                    e.target.classList.add('is-invalid');
+                    e.target.setCustomValidity(`El valor máximo permitido es ${maxAccelZ} rpm/s`);
+                } else {
+                    e.target.classList.remove('is-invalid');
+                    e.target.setCustomValidity('');
+                }
+            });
+        }
     }
 
     async saveRecipe(recipeId = null) {
@@ -379,6 +680,43 @@ class RecipesScreen {
         const name = formData.get('name')?.trim();
         if (!name) {
             this.app.showError('El nombre de la receta es obligatorio');
+            return;
+        }
+
+        // Obtener configuraciones del sistema para validar límites
+        const config = this.systemConfig || {};
+        const maxVelocityY = config.max_velocity_y || 1000;
+        const maxVelocityZ = config.max_velocity_z || 1000;
+        const maxAccelY = config.max_accel_y || 100;
+        const maxAccelZ = config.max_accel_z || 100;
+
+        // Validar límites antes de guardar
+        const velocityY = parseFloat(formData.get('velocityY')) || 0;
+        const velocityZ = parseFloat(formData.get('transferSpeed')) || 0;
+        const accelY = parseFloat(formData.get('accelY')) || 0;
+        const accelZ = parseFloat(formData.get('dipSpeed')) || 0;
+
+        if (velocityY > maxVelocityY) {
+            this.app.showError(`La velocidad Y no puede exceder ${maxVelocityY} rpm`);
+            form.querySelector('#recipe-velocity-y').focus();
+            return;
+        }
+
+        if (velocityZ > maxVelocityZ) {
+            this.app.showError(`La velocidad Z no puede exceder ${maxVelocityZ} rpm`);
+            form.querySelector('#recipe-transfer-speed').focus();
+            return;
+        }
+
+        if (accelY > maxAccelY) {
+            this.app.showError(`La aceleración Y no puede exceder ${maxAccelY} rpm/s`);
+            form.querySelector('#recipe-accel-y').focus();
+            return;
+        }
+
+        if (accelZ > maxAccelZ) {
+            this.app.showError(`La aceleración Z no puede exceder ${maxAccelZ} rpm/s`);
+            form.querySelector('#recipe-dip-speed').focus();
             return;
         }
 
@@ -394,7 +732,34 @@ class RecipesScreen {
                 accelX: parseFloat(formData.get('accelX')) || 0,
                 accelY: parseFloat(formData.get('accelY')) || 0,
                 humidityOffset: parseFloat(formData.get('humidityOffset')) || 0,
-                temperatureOffset: parseFloat(formData.get('temperatureOffset')) || 0
+                temperatureOffset: parseFloat(formData.get('temperatureOffset')) || 0,
+                // Tiempos de inmersión (en milisegundos)
+                dippingWait0: parseInt(formData.get('dippingWait0')) || 0,
+                dippingWait1: parseInt(formData.get('dippingWait1')) || 0,
+                dippingWait2: parseInt(formData.get('dippingWait2')) || 0,
+                dippingWait3: parseInt(formData.get('dippingWait3')) || 0,
+                transferWait: parseInt(formData.get('transferWait')) || 0,
+                // Parámetros de proceso
+                cycles: parseInt(formData.get('cycles')) || 1,
+                fan: formData.get('fan') === 'true',
+                exceptDripping1: formData.get('exceptDripping1') === 'true',
+                exceptDripping2: formData.get('exceptDripping2') === 'true',
+                exceptDripping3: formData.get('exceptDripping3') === 'true',
+                exceptDripping4: formData.get('exceptDripping4') === 'true',
+                // Posiciones
+                dipStartPosition: parseFloat(formData.get('dipStartPosition')) || 0,
+                dippingLength: parseFloat(formData.get('dippingLength')) || 0,
+                transferSpeed: velocityZ,
+                dipSpeed: accelZ
+                // Variables Pendiente (COMENTADAS - No implementadas)
+                // setTemp1: parseFloat(formData.get('setTemp1')) || 0,
+                // setTemp2: parseFloat(formData.get('setTemp2')) || 0,
+                // setTemp3: parseFloat(formData.get('setTemp3')) || 0,
+                // setTemp4: parseFloat(formData.get('setTemp4')) || 0,
+                // setStirr1: parseFloat(formData.get('setStirr1')) || 0,
+                // setStirr2: parseFloat(formData.get('setStirr2')) || 0,
+                // setStirr3: parseFloat(formData.get('setStirr3')) || 0,
+                // setStirr4: parseFloat(formData.get('setStirr4')) || 0,
             }
         };
         
@@ -467,7 +832,11 @@ class RecipesScreen {
 
         } catch (error) {
             console.error('Error guardando receta:', error);
-            this.app.showError('Error guardando la receta');
+            // Mostrar el mensaje de error específico del servidor si está disponible
+            const errorMessage = error.message && error.message !== 'API Error: 500' 
+                ? error.message 
+                : 'Error guardando la receta';
+            this.app.showError(errorMessage);
         } finally {
             // Restaurar botón
             const saveBtn = document.getElementById('save-recipe-btn');
@@ -479,19 +848,52 @@ class RecipesScreen {
     async executeSelectedRecipe() {
         if (!this.selectedRecipe) return;
 
+        // Verificar si hay un proceso ejecutándose antes de intentar iniciar
+        if (this.processStatus === 'running' || this.processStatus === 'paused') {
+            this.app.showError('Ya hay un proceso ejecutándose. Debe detenerlo antes de iniciar uno nuevo.');
+            // Navegar a la pantalla de proceso para que el usuario pueda detenerlo
+            setTimeout(() => {
+                this.app.navigateToScreen('process');
+            }, 2000);
+            return;
+        }
+
         try {
-            await this.app.apiCall('/process/start', {
+            const result = await this.app.apiCall('/process/start', {
                 method: 'POST',
                 body: JSON.stringify({
                     recipeId: this.selectedRecipe.id
                 })
             });
 
-            this.app.showSuccess('Proceso iniciado correctamente');
-            this.app.navigateToScreen('process');
+            if (result && result.success) {
+                this.app.showSuccess('Proceso iniciado correctamente');
+                // Actualizar estado del proceso
+                this.processStatus = 'running';
+                this.updateActionButtons();
+                // Emitir evento para que otras pantallas se actualicen
+                document.dispatchEvent(new CustomEvent('process-status-changed'));
+                // Navegar a la pantalla de proceso
+                this.app.navigateToScreen('process');
+            }
 
         } catch (error) {
-            this.app.showError('Error iniciando el proceso');
+            // Manejar error específico cuando ya hay un proceso ejecutándose
+            if (error.status === 409) {
+                const errorData = error.responseData ? JSON.parse(error.responseData) : null;
+                const message = errorData?.message || 'Ya hay un proceso ejecutándose. Debe detenerlo antes de iniciar uno nuevo.';
+                this.app.showError(message);
+                // Actualizar estado local
+                this.processStatus = 'running';
+                this.updateActionButtons();
+                // Navegar a la pantalla de proceso después de 2 segundos
+                setTimeout(() => {
+                    this.app.navigateToScreen('process');
+                }, 2000);
+            } else {
+                const errorMessage = error.message || 'Error iniciando el proceso';
+                this.app.showError(errorMessage);
+            }
         }
     }
 
@@ -753,6 +1155,117 @@ class RecipesScreen {
                                         <label class="form-label">Offset Temperatura (°C)</label>
                                         <input type="number" class="form-control" name="temperatureOffset" id="recipe-temp-offset" step="0.1">
                                     </div>
+                                    
+                                    <!-- Tiempos de Inmersión -->
+                                    <div class="col-12">
+                                        <hr class="my-3">
+                                        <h6 class="fw-bold text-primary">
+                                            <i class="bi bi-clock-history me-2"></i>Tiempos de Inmersión (ms)
+                                        </h6>
+                                    </div>
+                                    <div class="col-md-6">
+                                        <label class="form-label">Tiempo de Inmersión 1 (ms)</label>
+                                        <input type="number" class="form-control" name="dippingWait0" id="recipe-dipping-wait0" min="0" step="100">
+                                    </div>
+                                    <div class="col-md-6">
+                                        <label class="form-label">Tiempo de Inmersión 2 (ms)</label>
+                                        <input type="number" class="form-control" name="dippingWait1" id="recipe-dipping-wait1" min="0" step="100">
+                                    </div>
+                                    <div class="col-md-6">
+                                        <label class="form-label">Tiempo de Inmersión 3 (ms)</label>
+                                        <input type="number" class="form-control" name="dippingWait2" id="recipe-dipping-wait2" min="0" step="100">
+                                    </div>
+                                    <div class="col-md-6">
+                                        <label class="form-label">Tiempo de Inmersión 4 (ms)</label>
+                                        <input type="number" class="form-control" name="dippingWait3" id="recipe-dipping-wait3" min="0" step="100">
+                                    </div>
+                                    <div class="col-md-6">
+                                        <label class="form-label">Tiempo de Espera Transferencia Y (ms)</label>
+                                        <input type="number" class="form-control" name="transferWait" id="recipe-transfer-wait" min="0" step="100">
+                                    </div>
+                                    
+                                    <!-- Parámetros de Proceso -->
+                                    <div class="col-12">
+                                        <hr class="my-3">
+                                        <h6 class="fw-bold text-primary">
+                                            <i class="bi bi-gear me-2"></i>Parámetros de Proceso
+                                        </h6>
+                                    </div>
+                                    <div class="col-md-6">
+                                        <label class="form-label">Cantidad de Ciclos</label>
+                                        <input type="number" class="form-control" name="cycles" id="recipe-cycles" min="1" value="1">
+                                    </div>
+                                    <div class="col-md-6">
+                                        <label class="form-label">Ventilador</label>
+                                        <select class="form-control" name="fan" id="recipe-fan">
+                                            <option value="false">Desactivado</option>
+                                            <option value="true">Activado</option>
+                                        </select>
+                                    </div>
+                                    
+                                    <!-- Exclusión de Inmersión -->
+                                    <div class="col-12">
+                                        <label class="form-label fw-bold">Excluir Inmersión en Posiciones:</label>
+                                    </div>
+                                    <div class="col-md-3">
+                                        <div class="form-check">
+                                            <input class="form-check-input" type="checkbox" name="exceptDripping1" id="recipe-except-dripping1" value="true">
+                                            <label class="form-check-label" for="recipe-except-dripping1">Excluir Y1</label>
+                                        </div>
+                                    </div>
+                                    <div class="col-md-3">
+                                        <div class="form-check">
+                                            <input class="form-check-input" type="checkbox" name="exceptDripping2" id="recipe-except-dripping2" value="true">
+                                            <label class="form-check-label" for="recipe-except-dripping2">Excluir Y2</label>
+                                        </div>
+                                    </div>
+                                    <div class="col-md-3">
+                                        <div class="form-check">
+                                            <input class="form-check-input" type="checkbox" name="exceptDripping3" id="recipe-except-dripping3" value="true">
+                                            <label class="form-check-label" for="recipe-except-dripping3">Excluir Y3</label>
+                                        </div>
+                                    </div>
+                                    <div class="col-md-3">
+                                        <div class="form-check">
+                                            <input class="form-check-input" type="checkbox" name="exceptDripping4" id="recipe-except-dripping4" value="true">
+                                            <label class="form-check-label" for="recipe-except-dripping4">Excluir Y4</label>
+                                        </div>
+                                    </div>
+                                    
+                                    <!-- Posiciones (Opcional) -->
+                                    <div class="col-12">
+                                        <hr class="my-3">
+                                        <h6 class="fw-bold text-primary">
+                                            <i class="bi bi-geo-alt me-2"></i>Posiciones (Opcional)
+                                        </h6>
+                                    </div>
+                                    <div class="col-md-6">
+                                        <label class="form-label">Posición Inicial Z (mm)</label>
+                                        <input type="number" class="form-control" name="dipStartPosition" id="recipe-dip-start-position" step="0.1">
+                                    </div>
+                                    <div class="col-md-6">
+                                        <label class="form-label">Longitud de Inmersión (mm)</label>
+                                        <input type="number" class="form-control" name="dippingLength" id="recipe-dipping-length" step="0.1">
+                                    </div>
+                                    <div class="col-md-6">
+                                        <label class="form-label">Velocidad Transferencia Y (mm/s)</label>
+                                        <input type="number" class="form-control" name="transferSpeed" id="recipe-transfer-speed" step="0.1">
+                                    </div>
+                                    <div class="col-md-6">
+                                        <label class="form-label">Velocidad Inmersión Z (mm/s)</label>
+                                        <input type="number" class="form-control" name="dipSpeed" id="recipe-dip-speed" step="0.1">
+                                    </div>
+                                    
+                                    <!-- Variables Pendiente (COMENTADAS) -->
+                                    <!--
+                                    <div class="col-12">
+                                        <hr class="my-3">
+                                        <h6 class="fw-bold text-muted">
+                                            <i class="bi bi-pause-circle me-2"></i>Variables Pendiente (No implementadas)
+                                        </h6>
+                                        <p class="text-muted small">Estas variables están marcadas como pendientes y no están disponibles aún.</p>
+                                    </div>
+                                    -->
                                 </div>
                             </form>
                         </div>

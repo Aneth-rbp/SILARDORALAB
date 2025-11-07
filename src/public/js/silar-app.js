@@ -422,6 +422,14 @@ class SilarApp {
     }
 
     navigateToScreen(screenName, params = {}) {
+        // Validar permisos para pantallas restringidas
+        if (screenName === 'configuration') {
+            if (this.userSession?.role !== 'admin') {
+                this.showError('Solo los administradores pueden acceder a la configuración del sistema');
+                return;
+            }
+        }
+        
         // Si es la primera vez que se carga el dashboard, forzar la carga
         if (this.currentScreen === screenName && this.currentScreen === 'dashboard' && !this.dashboardLoaded) {
             this.dashboardLoaded = true;
@@ -556,7 +564,9 @@ class SilarApp {
         try {
             // Añadir token de autenticación a todas las llamadas API
             const headers = {
-                'Content-Type': 'application/json',
+                'Content-Type': 'application/json; charset=utf-8',
+                'Accept': 'application/json; charset=utf-8',
+                'Accept-Charset': 'utf-8',
                 ...options.headers
             };
 
@@ -575,11 +585,26 @@ class SilarApp {
                 return null;
             }
             
+            // Obtener el texto y parsear manualmente para asegurar UTF-8
+            const text = await response.text();
+            
             if (!response.ok) {
-                throw new Error(`API Error: ${response.status}`);
+                // Intentar parsear el error del servidor
+                let errorMessage = `Error del servidor (${response.status})`;
+                try {
+                    const errorData = JSON.parse(text);
+                    errorMessage = errorData.message || errorData.error || errorMessage;
+                } catch (e) {
+                    // Si no se puede parsear, usar el texto directamente
+                    errorMessage = text || errorMessage;
+                }
+                const error = new Error(errorMessage);
+                error.status = response.status;
+                error.responseData = text;
+                throw error;
             }
             
-            return await response.json();
+            return JSON.parse(text);
         } catch (error) {
             console.error('API Call Error:', error);
             
@@ -588,7 +613,13 @@ class SilarApp {
                 return this.getDemoApiResponse(endpoint, options);
             }
             
-            this.showError(`Error en la comunicación: ${error.message}`);
+            // Si el error tiene un mensaje específico del servidor (error.responseData),
+            // no mostrar error genérico aquí - el código que llama manejará el error específico
+            // Solo mostrar error genérico para errores de red/conexión
+            if (!error.responseData && (error.message.includes('fetch') || error.message.includes('Failed to fetch'))) {
+                this.showError(`Error en la comunicación: No se pudo conectar al servidor`);
+            }
+            // Para otros errores, el código que llama a apiCall manejará el mensaje específico
             throw error;
         }
     }
@@ -803,7 +834,10 @@ class SilarApp {
     async loadDashboardContent() {
         try {
             if (window.DashboardScreen && typeof window.DashboardScreen.getTemplate === 'function') {
-                return window.DashboardScreen.getTemplate();
+                const userRole = this.userSession?.role || 'usuario';
+                console.log('loadDashboardContent - Rol del usuario:', userRole, 'Es admin:', userRole === 'admin');
+                console.log('userSession completo:', this.userSession);
+                return window.DashboardScreen.getTemplate(userRole);
             } else {
                 throw new Error('DashboardScreen not available');
             }

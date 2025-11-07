@@ -26,6 +26,7 @@ class SilarWebServer {
     this.io = null;
     this.dbConnection = null;
     this.arduinoController = getInstance();
+    this.isReconnecting = false; // Bandera para evitar reconexiones múltiples
     this.setupExpress();
   }
 
@@ -141,9 +142,9 @@ class SilarWebServer {
       next();
     });
 
-    // Ruta raíz - redirigir a login
+    // Ruta raíz - servir index.html directamente
     app.get('/', (req, res) => {
-      res.redirect('/login.html');
+      res.sendFile(path.join(__dirname, 'src', 'public', 'index.html'));
     });
 
     // Rutas API
@@ -153,8 +154,18 @@ class SilarWebServer {
     app.put('/api/recipes/:id', this.authenticateToken.bind(this), this.updateRecipe.bind(this));
     app.delete('/api/recipes/:id', this.authenticateToken.bind(this), this.deleteRecipe.bind(this));
     app.get('/api/system/status', this.getSystemStatus.bind(this));
-    app.post('/api/process/start', this.startProcess.bind(this));
-    app.post('/api/process/stop', this.stopProcess.bind(this));
+    app.get('/api/process/status', this.authenticateToken.bind(this), this.getProcessStatus.bind(this));
+    app.post('/api/process/start', this.authenticateToken.bind(this), this.startProcess.bind(this));
+    app.post('/api/process/pause', this.authenticateToken.bind(this), this.pauseProcess.bind(this));
+    app.post('/api/process/resume', this.authenticateToken.bind(this), this.resumeProcess.bind(this));
+    app.post('/api/process/stop', this.authenticateToken.bind(this), this.stopProcess.bind(this));
+    
+    // Rutas API Configuración (solo admin)
+    app.get('/api/config', this.authenticateToken.bind(this), this.getSystemConfig.bind(this));
+    app.put('/api/config', this.authenticateToken.bind(this), this.updateSystemConfig.bind(this));
+    
+    // Ruta pública para leer límites del sistema (todos los usuarios autenticados)
+    app.get('/api/config/limits', this.authenticateToken.bind(this), this.getSystemLimits.bind(this));
     
     // Rutas API Arduino
     app.get('/api/arduino/ports', this.getArduinoPorts.bind(this));
@@ -274,19 +285,101 @@ class SilarWebServer {
   }
 
   async initDatabase() {
+    // Evitar múltiples intentos de conexión simultáneos
+    if (this.isReconnecting) {
+      logger.warn('Ya hay un intento de reconexión en curso, esperando...');
+      return;
+    }
+    
     try {
+      this.isReconnecting = true;
+      
+      // Cerrar conexión anterior si existe
+      if (this.dbConnection) {
+        try {
+          await this.dbConnection.end();
+        } catch (error) {
+          // Ignorar errores al cerrar conexión anterior
+        }
+      }
+      
       this.dbConnection = await mysql.createConnection({
         host: config.database.host,
         user: config.database.user,
         password: config.database.password,
         database: config.database.database,
-        charset: config.database.charset,
-        timezone: config.database.timezone
+        charset: 'utf8mb4',
+        timezone: config.database.timezone,
+        // Configuración adicional para UTF-8
+        typeCast: function (field, next) {
+          if (field.type === 'VAR_STRING' || field.type === 'STRING' || field.type === 'TEXT') {
+            return field.string();
+          }
+          return next();
+        }
       });
+      
+      // Establecer UTF-8 explícitamente en la conexión
+      await this.dbConnection.execute("SET NAMES 'utf8mb4' COLLATE 'utf8mb4_unicode_ci'");
+      await this.dbConnection.execute("SET CHARACTER SET utf8mb4");
+      await this.dbConnection.execute("SET character_set_connection=utf8mb4");
+      
+      // Manejar errores de conexión perdida
+      this.dbConnection.on('error', async (err) => {
+        if (err.code === 'PROTOCOL_CONNECTION_LOST' || err.code === 'ECONNRESET') {
+          logger.warn('Conexión a la base de datos perdida, intentando reconectar...');
+          this.dbConnection = null;
+          // Esperar un poco antes de reconectar para evitar bucles
+          setTimeout(async () => {
+            try {
+              await this.initDatabase();
+            } catch (reconnectError) {
+              logger.error('Error al reconectar a la base de datos:', reconnectError);
+            }
+          }, 1000);
+        } else {
+          logger.error('Error de base de datos:', err);
+        }
+      });
+      
       logger.databaseConnected();
+      this.isReconnecting = false;
     } catch (error) {
+      this.isReconnecting = false;
       logger.databaseError(error);
+      this.dbConnection = null;
       throw error;
+    }
+  }
+
+  /**
+   * Verifica si la conexión a la base de datos está activa
+   */
+  async ensureDatabaseConnection() {
+    if (!this.dbConnection) {
+      try {
+        await this.initDatabase();
+      } catch (error) {
+        logger.error('No se pudo establecer conexión con la base de datos:', error);
+        throw error;
+      }
+    }
+    
+    // Verificar que la conexión sigue activa
+    try {
+      await this.dbConnection.execute('SELECT 1');
+    } catch (error) {
+      if (error.code === 'PROTOCOL_CONNECTION_LOST' || error.code === 'ECONNRESET') {
+        logger.warn('Conexión perdida, reconectando...');
+        try {
+          await this.initDatabase();
+        } catch (reconnectError) {
+          logger.error('Error al reconectar:', reconnectError);
+          throw reconnectError;
+        }
+      } else {
+        throw error;
+      }
     }
   }
 
@@ -399,7 +492,10 @@ class SilarWebServer {
         query = `
           SELECT r.*, u.full_name as created_by_name, u.role as creator_role,
                  rp.duration, rp.temperature, rp.velocity_x, rp.velocity_y,
-                 rp.accel_x, rp.accel_y, rp.humidity_offset, rp.temperature_offset
+                 rp.accel_x, rp.accel_y, rp.humidity_offset, rp.temperature_offset,
+                 rp.dipping_wait0, rp.dipping_wait1, rp.dipping_wait2, rp.dipping_wait3, rp.transfer_wait,
+                 rp.cycles, rp.fan, rp.except_dripping1, rp.except_dripping2, rp.except_dripping3, rp.except_dripping4,
+                 rp.dip_start_position, rp.dipping_length, rp.transfer_speed, rp.dip_speed
           FROM recipes r 
           LEFT JOIN users u ON r.created_by_user_id = u.id 
           LEFT JOIN recipe_parameters rp ON r.id = rp.recipe_id
@@ -411,7 +507,10 @@ class SilarWebServer {
         query = `
           SELECT r.*, u.full_name as created_by_name, u.role as creator_role,
                  rp.duration, rp.temperature, rp.velocity_x, rp.velocity_y,
-                 rp.accel_x, rp.accel_y, rp.humidity_offset, rp.temperature_offset
+                 rp.accel_x, rp.accel_y, rp.humidity_offset, rp.temperature_offset,
+                 rp.dipping_wait0, rp.dipping_wait1, rp.dipping_wait2, rp.dipping_wait3, rp.transfer_wait,
+                 rp.cycles, rp.fan, rp.except_dripping1, rp.except_dripping2, rp.except_dripping3, rp.except_dripping4,
+                 rp.dip_start_position, rp.dipping_length, rp.transfer_speed, rp.dip_speed
           FROM recipes r 
           LEFT JOIN users u ON r.created_by_user_id = u.id 
           LEFT JOIN recipe_parameters rp ON r.id = rp.recipe_id
@@ -436,7 +535,38 @@ class SilarWebServer {
           accelX: row.accel_x || 0,
           accelY: row.accel_y || 0,
           humidityOffset: row.humidity_offset || 0,
-          temperatureOffset: row.temperature_offset || 0
+          temperatureOffset: row.temperature_offset || 0,
+          // Tiempos de inmersión
+          dippingWait0: row.dipping_wait0 || 0,
+          dippingWait1: row.dipping_wait1 || 0,
+          dippingWait2: row.dipping_wait2 || 0,
+          dippingWait3: row.dipping_wait3 || 0,
+          transferWait: row.transfer_wait || 0,
+          // Parámetros de proceso
+          cycles: row.cycles || 1,
+          fan: row.fan || false,
+          exceptDripping1: row.except_dripping1 || false,
+          exceptDripping2: row.except_dripping2 || false,
+          exceptDripping3: row.except_dripping3 || false,
+          exceptDripping4: row.except_dripping4 || false,
+          // Posiciones
+          dipStartPosition: row.dip_start_position || 0,
+          dippingLength: row.dipping_length || 0,
+          transferSpeed: row.transfer_speed || 0,
+          dipSpeed: row.dip_speed || 0
+          // Variables Pendiente (COMENTADAS - No implementadas)
+          // setTemp1: row.set_temp1 || 0,
+          // setTemp2: row.set_temp2 || 0,
+          // setTemp3: row.set_temp3 || 0,
+          // setTemp4: row.set_temp4 || 0,
+          // setStirr1: row.set_stirr1 || 0,
+          // setStirr2: row.set_stirr2 || 0,
+          // setStirr3: row.set_stirr3 || 0,
+          // setStirr4: row.set_stirr4 || 0,
+          // measTemp1: row.meas_temp1 || 0,
+          // measTemp2: row.meas_temp2 || 0,
+          // measTemp3: row.meas_temp3 || 0,
+          // measTemp4: row.meas_temp4 || 0,
         }
       }));
       
@@ -490,11 +620,21 @@ class SilarWebServer {
         
         const recipeId = result.insertId;
         
-        // Insertar parámetros
+        // Insertar parámetros (incluyendo tiempos de inmersión y ciclos)
+        // Convertir valores booleanos a 0/1 para MySQL
+        const fanValue = parameters?.fan ? 1 : 0;
+        const exceptDripping1Value = parameters?.exceptDripping1 ? 1 : 0;
+        const exceptDripping2Value = parameters?.exceptDripping2 ? 1 : 0;
+        const exceptDripping3Value = parameters?.exceptDripping3 ? 1 : 0;
+        const exceptDripping4Value = parameters?.exceptDripping4 ? 1 : 0;
+        
         await this.dbConnection.execute(
           `INSERT INTO recipe_parameters 
-           (recipe_id, duration, temperature, velocity_x, velocity_y, accel_x, accel_y, humidity_offset, temperature_offset) 
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+           (recipe_id, duration, temperature, velocity_x, velocity_y, accel_x, accel_y, humidity_offset, temperature_offset,
+            dipping_wait0, dipping_wait1, dipping_wait2, dipping_wait3, transfer_wait,
+            cycles, fan, except_dripping1, except_dripping2, except_dripping3, except_dripping4,
+            dip_start_position, dipping_length, transfer_speed, dip_speed) 
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
           [
             recipeId,
             parameters?.duration || 0,
@@ -504,7 +644,25 @@ class SilarWebServer {
             parameters?.accelX || 0,
             parameters?.accelY || 0,
             parameters?.humidityOffset || 0,
-            parameters?.temperatureOffset || 0
+            parameters?.temperatureOffset || 0,
+            // Tiempos de inmersión (en milisegundos)
+            parameters?.dippingWait0 || 0,
+            parameters?.dippingWait1 || 0,
+            parameters?.dippingWait2 || 0,
+            parameters?.dippingWait3 || 0,
+            parameters?.transferWait || 0,
+            // Parámetros de proceso
+            parameters?.cycles || 1,
+            fanValue,
+            exceptDripping1Value,
+            exceptDripping2Value,
+            exceptDripping3Value,
+            exceptDripping4Value,
+            // Posiciones
+            parameters?.dipStartPosition || 0,
+            parameters?.dippingLength || 0,
+            parameters?.transferSpeed || 0,
+            parameters?.dipSpeed || 0
           ]
         );
         
@@ -536,6 +694,24 @@ class SilarWebServer {
     try {
       const { id } = req.params;
       const { name, description, type, parameters } = req.body;
+      
+      // Verificar conexión a la base de datos
+      if (!this.dbConnection) {
+        return res.status(503).json({
+          success: false,
+          message: 'Error de conexión con la base de datos. Por favor, verifique que MySQL esté ejecutándose.'
+        });
+      }
+      
+      // Asegurar que la conexión esté activa
+      try {
+        await this.ensureDatabaseConnection();
+      } catch (dbError) {
+        return res.status(503).json({
+          success: false,
+          message: 'Error de conexión con la base de datos. Por favor, verifique que MySQL esté ejecutándose.'
+        });
+      }
       
       // Validar ID
       const recipeId = validator.validateId(id, 'recipeId');
@@ -593,11 +769,58 @@ class SilarWebServer {
           ]
         );
         
-        // Actualizar o insertar parámetros
+        // Actualizar o insertar parámetros (incluyendo tiempos de inmersión y ciclos)
+        // Convertir valores booleanos a 0/1 para MySQL
+        const fanValue = parameters?.fan ? 1 : 0;
+        const exceptDripping1Value = parameters?.exceptDripping1 ? 1 : 0;
+        const exceptDripping2Value = parameters?.exceptDripping2 ? 1 : 0;
+        const exceptDripping3Value = parameters?.exceptDripping3 ? 1 : 0;
+        const exceptDripping4Value = parameters?.exceptDripping4 ? 1 : 0;
+        
+        const paramsArray = [
+          recipeId,
+          parameters?.duration || 0,
+          parameters?.temperature || 0,
+          parameters?.velocityX || 0,
+          parameters?.velocityY || 0,
+          parameters?.accelX || 0,
+          parameters?.accelY || 0,
+          parameters?.humidityOffset || 0,
+          parameters?.temperatureOffset || 0,
+          // Tiempos de inmersión
+          parameters?.dippingWait0 || 0,
+          parameters?.dippingWait1 || 0,
+          parameters?.dippingWait2 || 0,
+          parameters?.dippingWait3 || 0,
+          parameters?.transferWait || 0,
+          // Parámetros de proceso
+          parameters?.cycles || 1,
+          fanValue,
+          exceptDripping1Value,
+          exceptDripping2Value,
+          exceptDripping3Value,
+          exceptDripping4Value,
+          // Posiciones
+          parameters?.dipStartPosition || 0,
+          parameters?.dippingLength || 0,
+          parameters?.transferSpeed || 0,
+          parameters?.dipSpeed || 0
+        ];
+        
+        // Log para depuración
+        logger.debug(`Actualizando parámetros de receta ${recipeId}`, {
+          columnCount: 24,
+          valueCount: paramsArray.length,
+          params: paramsArray
+        });
+        
         await this.dbConnection.execute(
           `INSERT INTO recipe_parameters 
-           (recipe_id, duration, temperature, velocity_x, velocity_y, accel_x, accel_y, humidity_offset, temperature_offset) 
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+           (recipe_id, duration, temperature, velocity_x, velocity_y, accel_x, accel_y, humidity_offset, temperature_offset,
+            dipping_wait0, dipping_wait1, dipping_wait2, dipping_wait3, transfer_wait,
+            cycles, fan, except_dripping1, except_dripping2, except_dripping3, except_dripping4,
+            dip_start_position, dipping_length, transfer_speed, dip_speed) 
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
            ON DUPLICATE KEY UPDATE
            duration = VALUES(duration),
            temperature = VALUES(temperature),
@@ -607,18 +830,23 @@ class SilarWebServer {
            accel_y = VALUES(accel_y),
            humidity_offset = VALUES(humidity_offset),
            temperature_offset = VALUES(temperature_offset),
+           dipping_wait0 = VALUES(dipping_wait0),
+           dipping_wait1 = VALUES(dipping_wait1),
+           dipping_wait2 = VALUES(dipping_wait2),
+           dipping_wait3 = VALUES(dipping_wait3),
+           transfer_wait = VALUES(transfer_wait),
+           cycles = VALUES(cycles),
+           fan = VALUES(fan),
+           except_dripping1 = VALUES(except_dripping1),
+           except_dripping2 = VALUES(except_dripping2),
+           except_dripping3 = VALUES(except_dripping3),
+           except_dripping4 = VALUES(except_dripping4),
+           dip_start_position = VALUES(dip_start_position),
+           dipping_length = VALUES(dipping_length),
+           transfer_speed = VALUES(transfer_speed),
+           dip_speed = VALUES(dip_speed),
            updated_at = NOW()`,
-          [
-            recipeId,
-            parameters?.duration || 0,
-            parameters?.temperature || 0,
-            parameters?.velocityX || 0,
-            parameters?.velocityY || 0,
-            parameters?.accelX || 0,
-            parameters?.accelY || 0,
-            parameters?.humidityOffset || 0,
-            parameters?.temperatureOffset || 0
-          ]
+          paramsArray
         );
         
         // Confirmar transacción
@@ -645,9 +873,39 @@ class SilarWebServer {
       }
     } catch (error) {
       logger.apiError('PUT', `/api/recipes/${req.params.id}`, error, req.user?.id);
-      res.status(500).json({ 
+      
+      // Determinar código de estado según el tipo de error
+      let statusCode = 500;
+      let errorMessage = error.message || 'Error interno del servidor';
+      
+      // Verificar si es un error de conexión perdida
+      if (error.code === 'PROTOCOL_CONNECTION_LOST' || error.code === 'ECONNRESET' || 
+          error.code === 'ETIMEDOUT' || error.fatal === true) {
+        statusCode = 503;
+        errorMessage = 'La conexión con la base de datos se perdió. Por favor, verifique que MySQL esté ejecutándose.';
+        // Intentar reconectar
+        try {
+          await this.initDatabase();
+        } catch (reconnectError) {
+          logger.error('Error al intentar reconectar a la base de datos:', reconnectError);
+        }
+      }
+      // Errores de validación
+      else if (error.type === 'VALIDATION_ERROR' || error.message?.includes('Validación fallida') || error.message?.includes('ID inválido')) {
+        statusCode = 400;
+        errorMessage = error.message || 'Datos de receta inválidos';
+      }
+      // Errores de base de datos MySQL
+      else if (error.code?.startsWith('ER_') || error.code === 'ECONNREFUSED' || 
+               error.code === 'ENOTFOUND' || error.sqlMessage) {
+        statusCode = 503;
+        errorMessage = error.sqlMessage || 'Error de conexión con la base de datos. Verifique que MySQL esté ejecutándose.';
+      }
+      
+      res.status(statusCode).json({ 
         success: false,
-        error: error.message 
+        message: errorMessage,
+        error: process.env.NODE_ENV === 'development' ? error.message : undefined
       });
     }
   }
@@ -908,6 +1166,55 @@ class SilarWebServer {
     return new Promise(resolve => setTimeout(resolve, ms));
   }
 
+  async getProcessStatus(req, res) {
+    try {
+      // Verificar conexión a la base de datos
+      if (!this.dbConnection) {
+        return res.status(503).json({
+          success: false,
+          message: 'Error de conexión con la base de datos'
+        });
+      }
+
+      await this.ensureDatabaseConnection();
+
+      // Buscar si hay un proceso ejecutándose
+      const [processes] = await this.dbConnection.execute(
+        `SELECT id, status, start_time, recipe_id, process_number 
+         FROM processes 
+         WHERE status IN ('running', 'paused') 
+         ORDER BY start_time DESC 
+         LIMIT 1`
+      );
+
+      if (processes.length === 0) {
+        return res.json({
+          success: true,
+          status: 'stopped',
+          process: null
+        });
+      }
+
+      const process = processes[0];
+      return res.json({
+        success: true,
+        status: process.status,
+        process: {
+          id: process.id,
+          recipeId: process.recipe_id,
+          processNumber: process.process_number,
+          startTime: process.start_time
+        }
+      });
+    } catch (error) {
+      logger.apiError('GET', '/api/process/status', error, req.user?.id);
+      res.status(500).json({ 
+        success: false,
+        error: error.message 
+      });
+    }
+  }
+
   async startProcess(req, res) {
     try {
       const { recipeId } = req.body;
@@ -919,26 +1226,596 @@ class SilarWebServer {
         });
       }
 
+      // Verificar conexión a la base de datos
+      if (!this.dbConnection) {
+        return res.status(503).json({
+          success: false,
+          message: 'Error de conexión con la base de datos'
+        });
+      }
+
+      await this.ensureDatabaseConnection();
+
+      // Verificar si ya hay un proceso ejecutándose
+      const [runningProcesses] = await this.dbConnection.execute(
+        `SELECT id, status, process_number 
+         FROM processes 
+         WHERE status IN ('running', 'paused') 
+         LIMIT 1`
+      );
+
+      if (runningProcesses.length > 0) {
+        const runningProcess = runningProcesses[0];
+        return res.status(409).json({
+          success: false,
+          message: `Ya hay un proceso ejecutándose (${runningProcess.process_number}). Debe detenerlo antes de iniciar uno nuevo.`,
+          runningProcess: {
+            id: runningProcess.id,
+            status: runningProcess.status,
+            processNumber: runningProcess.process_number
+          }
+        });
+      }
+
       // Validar ID
       const validRecipeId = validator.validateId(recipeId, 'recipeId');
       
-      logger.processStarted(Date.now(), validRecipeId, req.user?.id);
+      // Obtener los parámetros de la receta
+      const [recipes] = await this.dbConnection.execute(
+        `SELECT r.*, rp.* 
+         FROM recipes r
+         LEFT JOIN recipe_parameters rp ON r.id = rp.recipe_id
+         WHERE r.id = ? AND r.is_active = 1`,
+        [validRecipeId]
+      );
+
+      if (recipes.length === 0) {
+        return res.status(404).json({
+          success: false,
+          message: 'Receta no encontrada o inactiva'
+        });
+      }
+
+      const recipe = recipes[0];
+      const parameters = {
+        duration: recipe.duration || 0,
+        temperature: recipe.temperature || 0,
+        velocityY: recipe.velocity_y || 0,
+        velocityZ: recipe.velocity_x || 0, // Nota: velocity_x se usa para Z según el esquema
+        accelY: recipe.accel_y || 0,
+        accelZ: recipe.accel_x || 0,
+        dippingWait0: recipe.dipping_wait0 || 0,
+        dippingWait1: recipe.dipping_wait1 || 0,
+        dippingWait2: recipe.dipping_wait2 || 0,
+        dippingWait3: recipe.dipping_wait3 || 0,
+        transferWait: recipe.transfer_wait || 0,
+        cycles: recipe.cycles || 1,
+        fan: recipe.fan || false,
+        exceptDripping1: recipe.except_dripping1 || false,
+        exceptDripping2: recipe.except_dripping2 || false,
+        exceptDripping3: recipe.except_dripping3 || false,
+        exceptDripping4: recipe.except_dripping4 || false,
+        dipStartPosition: recipe.dip_start_position || 0,
+        dippingLength: recipe.dipping_length || 0,
+        transferSpeed: recipe.transfer_speed || 0,
+        dipSpeed: recipe.dip_speed || 0
+      };
+
+      // Verificar conexión con Arduino antes de iniciar proceso
+      if (!this.arduinoController.isConnected) {
+        logger.warn('Arduino no conectado al intentar iniciar proceso', { recipeId: validRecipeId });
+        // Continuar con el proceso aunque Arduino no esté conectado (modo simulación)
+        // En producción, podrías querer requerir conexión:
+        // return res.status(503).json({
+        //   success: false,
+        //   message: 'Arduino no conectado. Conecte el Arduino antes de iniciar un proceso.'
+        // });
+      }
+
+      // Crear nuevo proceso en la base de datos
+      const [result] = await this.dbConnection.execute(
+        `INSERT INTO processes (recipe_id, process_number, status, start_time, operator_name, parameters) 
+         VALUES (?, CONCAT('PROC-', DATE_FORMAT(NOW(), '%Y%m%d'), '-', LPAD(FLOOR(RAND() * 10000), 4, '0')), 'running', NOW(), ?, ?)`,
+        [validRecipeId, req.user?.fullName || req.user?.username || 'Usuario', JSON.stringify(parameters)]
+      );
+
+      const processId = result.insertId;
+
+      // Obtener el número de proceso generado
+      const [processData] = await this.dbConnection.execute(
+        `SELECT process_number FROM processes WHERE id = ?`,
+        [processId]
+      );
+
+      // Si Arduino está conectado, enviar comandos para iniciar el proceso automático
+      if (this.arduinoController.isConnected) {
+        try {
+          // Cambiar a modo automático
+          await this.arduinoController.setModeAutomatic();
+          logger.info('Arduino configurado en modo automático', { processId, recipeId: validRecipeId });
+          
+          // Enviar parámetros de la receta al Arduino para iniciar el proceso automático
+          await this.arduinoController.startRecipe(parameters);
+          logger.info('Proceso automático iniciado en Arduino', { processId, recipeId: validRecipeId, parameters });
+          
+        } catch (arduinoError) {
+          logger.error('Error enviando comandos al Arduino al iniciar proceso:', arduinoError);
+          // No fallar el proceso si hay error con Arduino, solo loguear
+          // El proceso puede continuar en modo simulación
+        }
+      }
+
+      logger.processStarted(processId, validRecipeId, req.user?.id);
       
-      // Lógica para iniciar proceso
-      res.json({ success: true, message: 'Proceso iniciado' });
+      res.json({ 
+        success: true, 
+        message: 'Proceso iniciado correctamente',
+        processId: processId,
+        processNumber: processData[0].process_number,
+        arduinoConnected: this.arduinoController.isConnected
+      });
     } catch (error) {
       logger.apiError('POST', '/api/process/start', error, req.user?.id);
-      res.status(500).json({ error: error.message });
+      res.status(500).json({ 
+        success: false,
+        error: error.message 
+      });
+    }
+  }
+
+  async pauseProcess(req, res) {
+    try {
+      // Verificar conexión a la base de datos
+      if (!this.dbConnection) {
+        return res.status(503).json({
+          success: false,
+          message: 'Error de conexión con la base de datos'
+        });
+      }
+
+      await this.ensureDatabaseConnection();
+
+      // Buscar proceso ejecutándose
+      const [runningProcesses] = await this.dbConnection.execute(
+        `SELECT id, status 
+         FROM processes 
+         WHERE status = 'running' 
+         ORDER BY start_time DESC 
+         LIMIT 1`
+      );
+
+      if (runningProcesses.length === 0) {
+        return res.status(404).json({
+          success: false,
+          message: 'No hay ningún proceso ejecutándose para pausar'
+        });
+      }
+
+      const process = runningProcesses[0];
+
+      // Si Arduino está conectado, enviar comando de pausa
+      if (this.arduinoController.isConnected) {
+        try {
+          await this.arduinoController.pauseProcess();
+          logger.info('Proceso pausado en Arduino', { processId: process.id });
+        } catch (arduinoError) {
+          logger.error('Error pausando proceso en Arduino:', arduinoError);
+          // Continuar con la pausa en la base de datos aunque haya error con Arduino
+        }
+      }
+
+      // Actualizar proceso a pausado
+      await this.dbConnection.execute(
+        `UPDATE processes 
+         SET status = 'paused' 
+         WHERE id = ?`,
+        [process.id]
+      );
+
+      logger.info('Proceso pausado', { 
+        processId: process.id, 
+        userId: req.user?.id 
+      });
+      
+      res.json({ 
+        success: true, 
+        message: 'Proceso pausado correctamente',
+        processId: process.id
+      });
+    } catch (error) {
+      logger.apiError('POST', '/api/process/pause', error, req.user?.id);
+      res.status(500).json({ 
+        success: false,
+        error: error.message 
+      });
+    }
+  }
+
+  async resumeProcess(req, res) {
+    try {
+      // Verificar conexión a la base de datos
+      if (!this.dbConnection) {
+        return res.status(503).json({
+          success: false,
+          message: 'Error de conexión con la base de datos'
+        });
+      }
+
+      await this.ensureDatabaseConnection();
+
+      // Buscar proceso pausado
+      const [pausedProcesses] = await this.dbConnection.execute(
+        `SELECT id, status 
+         FROM processes 
+         WHERE status = 'paused' 
+         ORDER BY start_time DESC 
+         LIMIT 1`
+      );
+
+      if (pausedProcesses.length === 0) {
+        return res.status(404).json({
+          success: false,
+          message: 'No hay ningún proceso pausado para reanudar'
+        });
+      }
+
+      const process = pausedProcesses[0];
+
+      // Si Arduino está conectado, enviar comando de reanudar
+      if (this.arduinoController.isConnected) {
+        try {
+          await this.arduinoController.resumeProcess();
+          logger.info('Proceso reanudado en Arduino', { processId: process.id });
+        } catch (arduinoError) {
+          logger.error('Error reanudando proceso en Arduino:', arduinoError);
+          // Continuar con la reanudación en la base de datos aunque haya error con Arduino
+        }
+      }
+
+      // Actualizar proceso a ejecutándose
+      await this.dbConnection.execute(
+        `UPDATE processes 
+         SET status = 'running' 
+         WHERE id = ?`,
+        [process.id]
+      );
+
+      logger.info('Proceso reanudado', { 
+        processId: process.id, 
+        userId: req.user?.id 
+      });
+      
+      res.json({ 
+        success: true, 
+        message: 'Proceso reanudado correctamente',
+        processId: process.id
+      });
+    } catch (error) {
+      logger.apiError('POST', '/api/process/resume', error, req.user?.id);
+      res.status(500).json({ 
+        success: false,
+        error: error.message 
+      });
     }
   }
 
   async stopProcess(req, res) {
     try {
-      logger.info('Proceso detenido', { userId: req.user?.id });
-      res.json({ success: true, message: 'Proceso detenido' });
+      // Verificar conexión a la base de datos
+      if (!this.dbConnection) {
+        return res.status(503).json({
+          success: false,
+          message: 'Error de conexión con la base de datos'
+        });
+      }
+
+      await this.ensureDatabaseConnection();
+
+      // Buscar proceso ejecutándose
+      const [runningProcesses] = await this.dbConnection.execute(
+        `SELECT id, status, start_time 
+         FROM processes 
+         WHERE status IN ('running', 'paused') 
+         ORDER BY start_time DESC 
+         LIMIT 1`
+      );
+
+      if (runningProcesses.length === 0) {
+        return res.status(404).json({
+          success: false,
+          message: 'No hay ningún proceso ejecutándose'
+        });
+      }
+
+      const process = runningProcesses[0];
+      const startTime = process.start_time;
+      const endTime = new Date();
+      const durationMinutes = startTime 
+        ? Math.floor((endTime - new Date(startTime)) / 60000)
+        : 0;
+
+      // Si Arduino está conectado, enviar comando de paro
+      if (this.arduinoController.isConnected) {
+        try {
+          // Enviar comando de paro de emergencia al Arduino
+          await this.arduinoController.emergencyStop();
+          logger.info('Proceso detenido en Arduino', { processId: process.id });
+        } catch (arduinoError) {
+          logger.error('Error deteniendo proceso en Arduino:', arduinoError);
+          // Continuar con la detención en la base de datos aunque haya error con Arduino
+        }
+      }
+
+      // Actualizar proceso a detenido
+      await this.dbConnection.execute(
+        `UPDATE processes 
+         SET status = 'cancelled', 
+             end_time = NOW(), 
+             duration_minutes = ? 
+         WHERE id = ?`,
+        [durationMinutes, process.id]
+      );
+
+      logger.info('Proceso detenido', { 
+        processId: process.id, 
+        userId: req.user?.id 
+      });
+      
+      res.json({ 
+        success: true, 
+        message: 'Proceso detenido correctamente',
+        processId: process.id
+      });
     } catch (error) {
       logger.apiError('POST', '/api/process/stop', error, req.user?.id);
-      res.status(500).json({ error: error.message });
+      res.status(500).json({ 
+        success: false,
+        error: error.message 
+      });
+    }
+  }
+
+  /**
+   * Obtiene la configuración del sistema
+   * Solo administradores pueden ver todas las configuraciones
+   */
+  async getSystemConfig(req, res) {
+    try {
+      // Verificar permisos de administrador
+      if (req.user.role !== 'admin') {
+        return res.status(403).json({
+          success: false,
+          message: 'Solo los administradores pueden acceder a la configuración del sistema'
+        });
+      }
+
+      // Verificar conexión a la base de datos
+      if (!this.dbConnection) {
+        return res.status(503).json({
+          success: false,
+          message: 'Error de conexión con la base de datos'
+        });
+      }
+
+      try {
+        await this.ensureDatabaseConnection();
+      } catch (dbError) {
+        return res.status(503).json({
+          success: false,
+          message: 'Error de conexión con la base de datos'
+        });
+      }
+
+      // Obtener todas las configuraciones del sistema
+      const [rows] = await this.dbConnection.execute(
+        'SELECT config_key, config_value, config_type, description, category FROM system_config ORDER BY category, config_key'
+      );
+
+      // Organizar configuraciones por categoría
+      const configByCategory = {};
+      rows.forEach(row => {
+        if (!configByCategory[row.category]) {
+          configByCategory[row.category] = [];
+        }
+        
+        // Convertir valores según el tipo
+        let value = row.config_value;
+        if (row.config_type === 'number') {
+          value = parseFloat(value) || 0;
+        } else if (row.config_type === 'boolean') {
+          value = value === 'true' || value === '1';
+        } else if (row.config_type === 'json') {
+          try {
+            value = JSON.parse(value);
+          } catch (e) {
+            value = value;
+          }
+        }
+        
+        configByCategory[row.category].push({
+          key: row.config_key,
+          value: value,
+          type: row.config_type,
+          description: row.description
+        });
+      });
+
+      res.json({
+        success: true,
+        config: configByCategory,
+        all: rows
+      });
+    } catch (error) {
+      logger.apiError('GET', '/api/config', error, req.user?.id);
+      res.status(500).json({
+        success: false,
+        error: error.message
+      });
+    }
+  }
+
+  /**
+   * Actualiza la configuración del sistema
+   * Solo administradores pueden modificar configuraciones
+   */
+  async updateSystemConfig(req, res) {
+    try {
+      // Verificar permisos de administrador
+      if (req.user.role !== 'admin') {
+        logger.warn('Intento de modificación de configuración no autorizada', {
+          userId: req.user.id,
+          role: req.user.role
+        });
+        return res.status(403).json({
+          success: false,
+          message: 'Solo los administradores pueden modificar la configuración del sistema'
+        });
+      }
+
+      const { config } = req.body;
+
+      if (!config || typeof config !== 'object') {
+        return res.status(400).json({
+          success: false,
+          message: 'Datos de configuración inválidos'
+        });
+      }
+
+      // Verificar conexión a la base de datos
+      if (!this.dbConnection) {
+        return res.status(503).json({
+          success: false,
+          message: 'Error de conexión con la base de datos'
+        });
+      }
+
+      try {
+        await this.ensureDatabaseConnection();
+      } catch (dbError) {
+        return res.status(503).json({
+          success: false,
+          message: 'Error de conexión con la base de datos'
+        });
+      }
+
+      // Iniciar transacción
+      await this.dbConnection.beginTransaction();
+
+      try {
+        const updates = [];
+        
+        // Actualizar cada configuración
+        for (const [key, value] of Object.entries(config)) {
+          // Obtener el tipo de configuración
+          const [configRow] = await this.dbConnection.execute(
+            'SELECT config_type FROM system_config WHERE config_key = ?',
+            [key]
+          );
+
+          if (configRow.length === 0) {
+            // Si no existe, crear nueva configuración
+            await this.dbConnection.execute(
+              'INSERT INTO system_config (config_key, config_value, config_type, updated_by) VALUES (?, ?, ?, ?)',
+              [key, String(value), 'string', req.user.username]
+            );
+          } else {
+            // Convertir valor según el tipo
+            let stringValue = String(value);
+            const configType = configRow[0].config_type;
+            
+            if (configType === 'json' && typeof value === 'object') {
+              stringValue = JSON.stringify(value);
+            }
+            
+            // Actualizar configuración existente
+            await this.dbConnection.execute(
+              'UPDATE system_config SET config_value = ?, updated_by = ?, updated_at = NOW() WHERE config_key = ?',
+              [stringValue, req.user.username, key]
+            );
+          }
+          
+          updates.push(key);
+        }
+
+        // Confirmar transacción
+        await this.dbConnection.commit();
+
+        logger.info(`Configuración actualizada por admin ${req.user.id}`, {
+          userId: req.user.id,
+          username: req.user.username,
+          updatedKeys: updates
+        });
+
+        res.json({
+          success: true,
+          message: 'Configuración guardada correctamente',
+          updatedKeys: updates
+        });
+      } catch (error) {
+        // Revertir transacción en caso de error
+        await this.dbConnection.rollback();
+        throw error;
+      }
+    } catch (error) {
+      logger.apiError('PUT', '/api/config', error, req.user?.id);
+      res.status(500).json({
+        success: false,
+        error: error.message
+      });
+    }
+  }
+
+  /**
+   * Obtiene solo los límites del sistema (público para todos los usuarios autenticados)
+   * Usado para validar recetas sin necesidad de permisos de admin
+   */
+  async getSystemLimits(req, res) {
+    try {
+      // Verificar conexión a la base de datos
+      if (!this.dbConnection) {
+        return res.status(503).json({
+          success: false,
+          message: 'Error de conexión con la base de datos'
+        });
+      }
+
+      try {
+        await this.ensureDatabaseConnection();
+      } catch (dbError) {
+        return res.status(503).json({
+          success: false,
+          message: 'Error de conexión con la base de datos'
+        });
+      }
+
+      // Obtener solo las configuraciones de límites
+      const [rows] = await this.dbConnection.execute(
+        `SELECT config_key, config_value, config_type 
+         FROM system_config 
+         WHERE config_key IN ('max_velocity_y', 'max_velocity_z', 'max_accel_y', 'max_accel_z', 'humidity_offset', 'temperature_offset')
+         ORDER BY config_key`
+      );
+
+      // Convertir a objeto plano
+      const limits = {};
+      rows.forEach(row => {
+        let value = row.config_value;
+        if (row.config_type === 'number') {
+          value = parseFloat(value) || 0;
+        }
+        limits[row.config_key] = value;
+      });
+
+      res.json({
+        success: true,
+        limits: limits
+      });
+    } catch (error) {
+      logger.apiError('GET', '/api/config/limits', error, req.user?.id);
+      res.status(500).json({
+        success: false,
+        error: error.message
+      });
     }
   }
 

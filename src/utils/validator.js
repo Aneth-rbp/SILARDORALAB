@@ -128,10 +128,8 @@ class Validator {
   validateRecipe(recipeData) {
     const validation = this.validateObject(recipeData, this.validationRules.recipe);
     
-    if (!validation.isValid) {
-      throw errorHandler.handleValidationError('recipe', JSON.stringify(validation.errors));
-    }
-
+    // No lanzar excepción, solo devolver el objeto de validación
+    // El código que llama puede manejar el error según sea necesario
     return validation;
   }
 
@@ -140,15 +138,15 @@ class Validator {
    */
   validateParameters(parameters) {
     if (!parameters || typeof parameters !== 'object') {
-      throw errorHandler.handleValidationError('parameters', 'Los parámetros deben ser un objeto');
+      return {
+        isValid: false,
+        errors: { _general: ['Los parámetros deben ser un objeto'] }
+      };
     }
 
     const validation = this.validateObject(parameters, this.validationRules.parameters);
     
-    if (!validation.isValid) {
-      throw errorHandler.handleValidationError('parameters', JSON.stringify(validation.errors));
-    }
-
+    // No lanzar excepción, solo devolver el objeto de validación
     return validation;
   }
 

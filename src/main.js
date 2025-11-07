@@ -44,7 +44,78 @@ function createWindow() {
     autoHideMenuBar: !isDev
   });
 
-  // Cargar la aplicación
+  // Manejar el cierre de la ventana
+  mainWindow.on('closed', () => {
+    mainWindow = null;
+  });
+
+  // Manejar errores de carga
+  mainWindow.webContents.on('did-fail-load', (event, errorCode, errorDescription) => {
+    console.error('Error cargando la aplicación:', errorDescription);
+    
+    if (errorCode === -6 || errorCode === -105) {
+      // Error de conexión - servidor no disponible
+      console.log('Servidor no disponible, esperando a que se inicie...');
+      // Reintentar cargar después de un momento
+      setTimeout(() => {
+        loadApplication();
+      }, 2000);
+    }
+  });
+
+  // Iniciar servidor primero, luego cargar la aplicación
+  if (isDev) {
+    startServerAndLoad();
+  } else {
+    // En producción, cargar desde archivos locales
+    mainWindow.loadFile(path.join(__dirname, 'public', 'index.html'));
+    mainWindow.once('ready-to-show', () => {
+      mainWindow.show();
+      startServer();
+    });
+  }
+}
+
+function startServerAndLoad() {
+  // Iniciar el servidor primero
+  startServer();
+  
+  // Esperar a que el servidor esté disponible antes de cargar
+  waitForServer(() => {
+    loadApplication();
+  });
+}
+
+function waitForServer(callback, attempts = 0) {
+  const maxAttempts = 30; // 30 intentos = 15 segundos máximo
+  
+  if (attempts >= maxAttempts) {
+    console.error('Timeout esperando al servidor');
+    showServerError();
+    return;
+  }
+
+  const { net } = require('electron');
+  const request = net.request('http://localhost:3000/api/system/status');
+  
+  request.on('response', () => {
+    console.log('Servidor disponible, cargando aplicación...');
+    callback();
+  });
+  
+  request.on('error', () => {
+    // Servidor aún no está listo, esperar y reintentar
+    setTimeout(() => {
+      waitForServer(callback, attempts + 1);
+    }, 500);
+  });
+  
+  request.end();
+}
+
+function loadApplication() {
+  if (!mainWindow) return;
+  
   if (isDev) {
     // En desarrollo, cargar desde el servidor web
     mainWindow.loadURL('http://localhost:3000');
@@ -59,29 +130,6 @@ function createWindow() {
   // Mostrar la ventana cuando esté lista
   mainWindow.once('ready-to-show', () => {
     mainWindow.show();
-    
-    // Iniciar automáticamente el servidor en modo desarrollo
-    if (isDev) {
-      startServer();
-    } else {
-      // En producción, solo verificar si está ejecutándose
-      checkServerStatus();
-    }
-  });
-
-  // Manejar el cierre de la ventana
-  mainWindow.on('closed', () => {
-    mainWindow = null;
-  });
-
-  // Manejar errores de carga
-  mainWindow.webContents.on('did-fail-load', (event, errorCode, errorDescription) => {
-    console.error('Error cargando la aplicación:', errorDescription);
-    
-    if (errorCode === -6) {
-      // Error de conexión - servidor no disponible
-      showServerError();
-    }
   });
 }
 
@@ -101,31 +149,6 @@ function checkServerStatus() {
   request.end();
 }
 
-function startServer() {
-  // Iniciar el servidor web como proceso hijo
-  serverProcess = spawn('node', ['server.js'], {
-    stdio: 'pipe',
-    detached: false
-  });
-
-  serverProcess.stdout.on('data', (data) => {
-    // Log silencioso del servidor
-  });
-
-  serverProcess.stderr.on('data', (data) => {
-    // Log silencioso de errores del servidor
-  });
-
-  serverProcess.on('close', (code) => {
-    // Servidor cerrado
-  });
-
-  // Esperar un momento para que el servidor se inicie
-  setTimeout(() => {
-    checkServerStatus();
-  }, 3000);
-}
-
 function showServerError() {
   dialog.showMessageBox(mainWindow, {
     type: 'warning',
@@ -142,28 +165,61 @@ function showServerError() {
 }
 
 function startServer() {
-  const { spawn } = require('child_process');
+  // En producción, usar la ruta correcta del ejecutable
+  const isDev = process.argv.includes('--dev');
   
-  const serverProcess = spawn('node', ['server.js'], {
-    cwd: path.join(__dirname, '..'),
-    stdio: 'pipe'
+  // Determinar la ruta del servidor según el entorno
+  let serverPath, serverCwd;
+  
+  if (isDev) {
+    // Modo desarrollo: usar rutas relativas
+    serverPath = path.join(__dirname, '..', 'server.js');
+    serverCwd = path.join(__dirname, '..');
+  } else {
+    // Modo producción: usar rutas desde resourcesPath
+    // En Electron empaquetado, los archivos están en resources/app o resources/app.asar
+    const appPath = app.getAppPath();
+    serverPath = path.join(appPath, 'server.js');
+    serverCwd = appPath;
+  }
+  
+  console.log(`Iniciando servidor desde: ${serverPath}`);
+  console.log(`Directorio de trabajo: ${serverCwd}`);
+  
+  // Iniciar el servidor web como proceso hijo
+  serverProcess = spawn('node', [serverPath], {
+    cwd: serverCwd,
+    stdio: 'pipe',
+    detached: false,
+    env: {
+      ...process.env,
+      NODE_ENV: isDev ? 'development' : 'production',
+      ELECTRON_RUN_AS_NODE: '1'
+    }
   });
-  
+
   serverProcess.stdout.on('data', (data) => {
     console.log('Servidor:', data.toString());
   });
-  
+
   serverProcess.stderr.on('data', (data) => {
     console.error('Error del servidor:', data.toString());
   });
-  
+
   serverProcess.on('close', (code) => {
     console.log('Servidor cerrado con código:', code);
+    // Intentar reiniciar si se cierra inesperadamente (solo en producción)
+    if (code !== 0 && !isDev) {
+      console.log('Reintentando iniciar servidor en 3 segundos...');
+      setTimeout(() => {
+        startServer();
+      }, 3000);
+    }
   });
-  
-  // Esperar un momento y recargar la ventana
+
+  // Esperar un momento para que el servidor se inicie
   setTimeout(() => {
-    mainWindow.reload();
+    checkServerStatus();
   }, 3000);
 }
 

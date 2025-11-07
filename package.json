@@ -48,7 +48,19 @@
     "files": [
       "src/**/*",
       "database/**/*",
-      "node_modules/**/*"
+      "server.js",
+      "config/**/*",
+      "node_modules/**/*",
+      "!node_modules/@serialport/bindings-cpp/**/*",
+      "!node_modules/@serialport/bindings-cpp",
+      "!**/node_modules/@serialport/bindings-cpp/**/*"
+    ],
+    "extraFiles": [
+      {
+        "from": "node_modules/@serialport/bindings-cpp",
+        "to": "node_modules/@serialport/bindings-cpp",
+        "filter": ["**/*"]
+      }
     ],
     "win": {
       "target": "nsis",
@@ -62,6 +74,11 @@
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
       "artifactName": "SILAR-System-Setup-${version}.exe"
-    }
+    },
+    "asar": false,
+    "asarUnpack": [
+      "**/node_modules/@serialport/**/*",
+      "**/node_modules/serialport/**/*"
+    ]
   }
 }

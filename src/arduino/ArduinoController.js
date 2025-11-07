@@ -511,6 +511,54 @@ class ArduinoController extends EventEmitter {
     }
 
     /**
+     * Inicia un proceso automático con parámetros de receta
+     */
+    async startRecipe(parameters) {
+        if (!this.isConnected) {
+            throw new Error('Arduino no conectado');
+        }
+        
+        // Construir comando START_RECIPE con parámetros JSON
+        const jsonParams = JSON.stringify({
+            cycles: parameters.cycles || 1,
+            dippingWait0: parameters.dippingWait0 || 5000,
+            dippingWait1: parameters.dippingWait1 || 5000,
+            dippingWait2: parameters.dippingWait2 || 5000,
+            dippingWait3: parameters.dippingWait3 || 5000,
+            transferWait: parameters.transferWait || 2000,
+            exceptDripping1: parameters.exceptDripping1 || false,
+            exceptDripping2: parameters.exceptDripping2 || false,
+            exceptDripping3: parameters.exceptDripping3 || false,
+            exceptDripping4: parameters.exceptDripping4 || false,
+            dipStartPosition: parameters.dipStartPosition || 0,
+            dippingLength: parameters.dippingLength || 10000,
+            transferSpeed: parameters.transferSpeed || 1000,
+            dipSpeed: parameters.dipSpeed || 1000,
+            fan: parameters.fan || false
+        });
+        
+        const command = `START_RECIPE:${jsonParams}`;
+        logger.info('Iniciando proceso automático en Arduino', { parameters });
+        return await this.sendCommand(command, false, 10000);
+    }
+
+    /**
+     * Pausa el proceso automático
+     */
+    async pauseProcess() {
+        logger.info('Pausando proceso automático');
+        return await this.sendCommand('PAUSE');
+    }
+
+    /**
+     * Reanuda el proceso automático
+     */
+    async resumeProcess() {
+        logger.info('Reanudando proceso automático');
+        return await this.sendCommand('RESUME');
+    }
+
+    /**
      * Solicita el estado actual del Arduino
      */
     async requestStatus() {

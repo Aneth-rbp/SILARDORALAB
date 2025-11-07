@@ -17,8 +17,13 @@ const ARDUINO_COMMANDS = {
     // Formato: Y<pasos> o Z<pasos>
     // Ejemplo: Y1000, Z-500
     
+    // Comandos de proceso automático
+    START_RECIPE: 'START_RECIPE:',  // Iniciar proceso automático con parámetros JSON
+    PAUSE: 'PAUSE',                 // Pausar proceso automático
+    RESUME: 'RESUME',               // Reanudar proceso automático
+    
     // Comandos de emergencia
-    STOP: 'STOP',         // Paro de emergencia
+    STOP: 'STOP',         // Paro de emergencia / Detener proceso
     RESET: 'RESET',       // Reiniciar sistema
     
     // Comandos de consulta
@@ -41,6 +46,20 @@ const ARDUINO_RESPONSES = {
     HOME_Z_START: 'Buscando Home Z',
     HOME_Z_FOUND: 'Home Z encontrado',
     HOME_COMPLETE: 'Secuencia HOME completada',
+    
+    // Respuestas de proceso automático
+    PARAMETROS_RECIBIDOS: 'PARAMETROS_RECIBIDOS',
+    PROCESO_INICIADO: 'PROCESO_INICIADO',
+    PROCESO_PAUSADO: 'PROCESO_PAUSADO',
+    PROCESO_REANUDADO: 'PROCESO_REANUDADO',
+    PROCESO_DETENIDO: 'PROCESO_DETENIDO',
+    PROCESO_COMPLETADO: 'PROCESO_COMPLETADO',
+    CICLO_INICIADO: 'CICLO_INICIADO',
+    CICLO_COMPLETADO: 'CICLO_COMPLETADO',
+    INMERSION_INICIADA: 'INMERSION_INICIADA',
+    INMERSION_COMPLETADA: 'INMERSION_COMPLETADA',
+    VENTILADOR_ACTIVADO: 'VENTILADOR_ACTIVADO',
+    VENTILADOR_DESACTIVADO: 'VENTILADOR_DESACTIVADO',
     
     // Respuestas de límites
     LIMIT_Y_MIN: 'Limite Y Min alcanzado',

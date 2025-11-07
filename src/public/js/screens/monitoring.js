@@ -357,10 +357,11 @@ class MonitoringScreen {
             // Velocidades y Tiempo
             { name: 'transferSpeed', label: 'Velocidad Y', unit: 'rpm', category: 'speed', description: 'Velocidad Y cambio de posición' },
             { name: 'dipSpeed', label: 'Velocidad Z', unit: 'rpm', category: 'speed', description: 'Velocidad Z inmersión sustrato a solución' },
-            { name: 'setStir1', label: 'Velocidad Removedor 1', unit: 'rpm', category: 'speed', description: 'Velocidad del removedor en la parrilla 1' },
-            { name: 'setStir2', label: 'Velocidad Removedor 2', unit: 'rpm', category: 'speed', description: 'Velocidad del removedor en la parrilla 2' },
-            { name: 'setStir3', label: 'Velocidad Removedor 3', unit: 'rpm', category: 'speed', description: 'Velocidad del removedor en la parrilla 3' },
-            { name: 'setStir4', label: 'Velocidad Removedor 4', unit: 'rpm', category: 'speed', description: 'Velocidad del removedor en la parrilla 4' },
+            // Variables Pendiente (COMENTADAS - No implementadas aún)
+            // { name: 'setStir1', label: 'Velocidad Removedor 1', unit: 'rpm', category: 'speed', description: '*Pendiente* Velocidad del removedor en la parrilla 1' },
+            // { name: 'setStir2', label: 'Velocidad Removedor 2', unit: 'rpm', category: 'speed', description: '*Pendiente* Velocidad del removedor en la parrilla 2' },
+            // { name: 'setStir3', label: 'Velocidad Removedor 3', unit: 'rpm', category: 'speed', description: '*Pendiente* Velocidad del removedor en la parrilla 3' },
+            // { name: 'setStir4', label: 'Velocidad Removedor 4', unit: 'rpm', category: 'speed', description: '*Pendiente* Velocidad del removedor en la parrilla 4' },
 
             // Tiempos de Espera
             { name: 'dippingWait0', label: 'Tiempo Inmersión 1', unit: 'ms', category: 'process', description: 'Tiempo de inmersión 1' },
@@ -372,14 +373,19 @@ class MonitoringScreen {
             // Sensores Ambientales
             { name: 'envTemp', label: 'Temperatura Ambiental', unit: '°C', category: 'sensors', description: 'Registro de temperatura ambiental' },
             { name: 'envHumidity', label: 'Humedad Ambiental', unit: '%', category: 'sensors', description: 'Registro de humedad ambiental' },
-            { name: 'setTemp1', label: 'Temperatura Parrilla 1', unit: '°C', category: 'sensors', description: 'Configurar temperatura deseada en la parrilla 1' },
-            { name: 'setTemp2', label: 'Temperatura Parrilla 2', unit: '°C', category: 'sensors', description: 'Configurar temperatura deseada en la parrilla 2' },
-            { name: 'setTemp3', label: 'Temperatura Parrilla 3', unit: '°C', category: 'sensors', description: 'Configurar temperatura deseada en la parrilla 3' },
-            { name: 'setTemp4', label: 'Temperatura Parrilla 4', unit: '°C', category: 'sensors', description: 'Configurar temperatura deseada en la parrilla 4' },
-            { name: 'measTemp1', label: 'Lectura Temp. Sol. 1', unit: '°C', category: 'sensors', description: 'Lectura de temperatura de la solución 1' },
-            { name: 'measTemp2', label: 'Lectura Temp. Sol. 2', unit: '°C', category: 'sensors', description: 'Lectura de temperatura de la solución 2' },
-            { name: 'measTemp3', label: 'Lectura Temp. Sol. 3', unit: '°C', category: 'sensors', description: 'Lectura de temperatura de la solución 3' },
-            { name: 'measTemp4', label: 'Lectura Temp. Sol. 4', unit: '°C', category: 'sensors', description: 'Lectura de temperatura de la solución 4' },
+            // Variables Pendiente (COMENTADAS - No implementadas aún)
+            // { name: 'setTemp1', label: 'Temperatura Parrilla 1', unit: '°C', category: 'sensors', description: '*Pendiente* Configurar temperatura deseada en la parrilla 1' },
+            // { name: 'setTemp2', label: 'Temperatura Parrilla 2', unit: '°C', category: 'sensors', description: '*Pendiente* Configurar temperatura deseada en la parrilla 2' },
+            // { name: 'setTemp3', label: 'Temperatura Parrilla 3', unit: '°C', category: 'sensors', description: '*Pendiente* Configurar temperatura deseada en la parrilla 3' },
+            // { name: 'setTemp4', label: 'Temperatura Parrilla 4', unit: '°C', category: 'sensors', description: '*Pendiente* Configurar temperatura deseada en la parrilla 4' },
+            // { name: 'setStirr1', label: 'Velocidad Removedor Parrilla 1', unit: 'rpm', category: 'sensors', description: '*Pendiente* Configurar la velocidad del removedor en la parrilla 1' },
+            // { name: 'setStirr2', label: 'Velocidad Removedor Parrilla 2', unit: 'rpm', category: 'sensors', description: '*Pendiente* Configurar la velocidad del removedor en la parrilla 2' },
+            // { name: 'setStirr3', label: 'Velocidad Removedor Parrilla 3', unit: 'rpm', category: 'sensors', description: '*Pendiente* Configurar la velocidad del removedor en la parrilla 3' },
+            // { name: 'setStirr4', label: 'Velocidad Removedor Parrilla 4', unit: 'rpm', category: 'sensors', description: '*Pendiente* Configurar la velocidad del removedor en la parrilla 4' },
+            // { name: 'measTemp1', label: 'Lectura Temp. Sol. 1', unit: '°C', category: 'sensors', description: '*Pendiente* Lectura de temperatura de la solución 1' },
+            // { name: 'measTemp2', label: 'Lectura Temp. Sol. 2', unit: '°C', category: 'sensors', description: '*Pendiente* Lectura de temperatura de la solución 2' },
+            // { name: 'measTemp3', label: 'Lectura Temp. Sol. 3', unit: '°C', category: 'sensors', description: '*Pendiente* Lectura de temperatura de la solución 3' },
+            // { name: 'measTemp4', label: 'Lectura Temp. Sol. 4', unit: '°C', category: 'sensors', description: '*Pendiente* Lectura de temperatura de la solución 4' },
 
             // Control de Proceso
             { name: 'cycles', label: 'Ciclos Restantes', unit: '', category: 'process', description: 'Cantidad de ciclos por prueba' },

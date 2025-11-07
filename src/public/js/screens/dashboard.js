@@ -12,7 +12,9 @@ class DashboardScreen {
     }
 
     init() {
-        this.renderDashboard();
+        // No renderizar aquí porque el contenido ya fue cargado por loadDashboardContent
+        // Solo actualizar si es necesario
+        // this.renderDashboard();
     }
 
 
@@ -22,7 +24,10 @@ class DashboardScreen {
     renderDashboard() {
         const container = document.getElementById('screen-container');
         if (container) {
-            container.innerHTML = DashboardScreen.getTemplate();
+            // Obtener el rol del usuario desde la sesión
+            const userRole = this.app.userSession?.role || 'usuario';
+            console.log('Dashboard - Rol del usuario:', userRole, 'Es admin:', userRole === 'admin');
+            container.innerHTML = DashboardScreen.getTemplate(userRole);
         }
     }
 
@@ -32,7 +37,9 @@ class DashboardScreen {
 
 
 
-    static getTemplate() {
+    static getTemplate(userRole = 'usuario') {
+        const isAdmin = userRole === 'admin';
+        
         return `
             <div class="dashboard-container">
                 <!-- Welcome Header -->
@@ -97,6 +104,7 @@ class DashboardScreen {
                         </div>
                     </div>
                     
+                    ${isAdmin ? `
                     <div class="col-xl-3 col-lg-4 col-md-6">
                         <div class="card border-0 shadow-sm h-100 navigation-card" onclick="window.silarApp.navigateToScreen('configuration')">
                             <div class="card-body text-center p-4">
@@ -111,6 +119,7 @@ class DashboardScreen {
                             </div>
                         </div>
                     </div>
+                    ` : ''}
                     
                     <div class="col-xl-3 col-lg-4 col-md-6">
                         <div class="card border-0 shadow-sm h-100 navigation-card" onclick="window.silarApp.navigateToScreen('manual')">
