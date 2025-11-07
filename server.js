@@ -78,6 +78,21 @@ class SilarWebServer {
     // Configurar Socket.IO con CORS
     this.io = socketIo(this.server, config.socket);
 
+    // Configurar charset UTF-8 para todas las respuestas JSON
+    app.use((req, res, next) => {
+      // Interceptar res.json para asegurar charset UTF-8
+      const originalJson = res.json.bind(res);
+      res.json = function(data) {
+        // Solo establecer charset si no se ha establecido otro Content-Type
+        if (!res.get('Content-Type') || res.get('Content-Type').includes('application/json')) {
+          res.setHeader('Content-Type', 'application/json; charset=utf-8');
+        }
+        return originalJson(data);
+      };
+      
+      next();
+    });
+
     // Configurar CORS para Express
     app.use((req, res, next) => {
       res.header('Access-Control-Allow-Origin', '*');
@@ -91,11 +106,26 @@ class SilarWebServer {
       }
     });
 
+    // Configurar express.json y urlencoded
+    // Express maneja UTF-8 por defecto, pero lo aseguramos con el middleware
     app.use(express.json());
     app.use(express.urlencoded({ extended: true }));
     
-    // Servir archivos estáticos desde la carpeta public
-    app.use(express.static(path.join(__dirname, 'src', 'public')));
+    // Servir archivos estáticos desde la carpeta public con charset UTF-8
+    app.use(express.static(path.join(__dirname, 'src', 'public'), {
+      setHeaders: (res, filePath) => {
+        // Establecer charset UTF-8 para archivos de texto
+        if (filePath.endsWith('.html')) {
+          res.setHeader('Content-Type', 'text/html; charset=utf-8');
+        } else if (filePath.endsWith('.js')) {
+          res.setHeader('Content-Type', 'application/javascript; charset=utf-8');
+        } else if (filePath.endsWith('.css')) {
+          res.setHeader('Content-Type', 'text/css; charset=utf-8');
+        } else if (filePath.endsWith('.json')) {
+          res.setHeader('Content-Type', 'application/json; charset=utf-8');
+        }
+      }
+    }));
     
     // Servir Socket.IO client
     app.get('/socket.io/socket.io.js', (req, res) => {
@@ -747,10 +777,24 @@ class SilarWebServer {
 
   async getArduinoState(req, res) {
     try {
+      // Si se solicita actualizar desde el Arduino, hacerlo
+      const refresh = req.query.refresh === 'true';
+      
+      if (refresh && this.arduinoController.isConnected) {
+        try {
+          await this.arduinoController.requestStatus();
+          // Esperar un momento para que se actualice el estado
+          await new Promise(resolve => setTimeout(resolve, 100));
+        } catch (error) {
+          logger.warn('No se pudo actualizar estado desde Arduino:', error.message);
+        }
+      }
+      
       const state = this.arduinoController.getState();
       res.json({
         success: true,
-        state: state
+        state: state,
+        connected: this.arduinoController.isConnected
       });
     } catch (error) {
       logger.error('Error obteniendo estado Arduino:', error);

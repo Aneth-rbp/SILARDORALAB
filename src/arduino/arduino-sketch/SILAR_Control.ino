@@ -104,6 +104,33 @@ void loop() {
       int pasos = comando.substring(1).toInt();
       moverEjeZ(pasos);
     }
+    else if (comando == "STATUS") {
+      Serial.print("STATUS:");
+      Serial.print("Mode=");
+      Serial.print(modo == 0 ? "MANUAL" : "AUTOMATIC");
+      Serial.print(",Emergency=");
+      Serial.print(emergencyStop ? "1" : "0");
+      Serial.print(",Y=");
+      Serial.print(posY);
+      Serial.print(",Z=");
+      Serial.print(posZ);
+      Serial.print(",HomeY=");
+      Serial.print(digitalRead(homePinY) == LOW ? "1" : "0");
+      Serial.print(",HomeZ=");
+      Serial.print(digitalRead(homePinZ) == LOW ? "1" : "0");
+      Serial.print(",LimitMinY=");
+      Serial.print(digitalRead(limitMinY) == LOW ? "1" : "0");
+      Serial.print(",LimitMaxY=");
+      Serial.print(digitalRead(limitMaxY) == LOW ? "1" : "0");
+      Serial.print(",LimitMinZ=");
+      Serial.print(digitalRead(limitMinZ) == LOW ? "1" : "0");
+      Serial.print(",LimitMaxZ=");
+      Serial.println(digitalRead(limitMaxZ) == LOW ? "1" : "0");
+    }
+    else {
+      Serial.print("Error: Comando desconocido: ");
+      Serial.println(comando);
+    }
   }
 }
 
@@ -140,28 +167,50 @@ void ejecutarHome() {
 }
 
 void moverEjeY(long pasos) {
-  if (pasos > 0) {
-    digitalWrite(dirPinY, HIGH);
-  } else {
-    digitalWrite(dirPinY, LOW);
+  if (emergencyStop) {
+    Serial.println("Error: Paro de emergencia activo");
+    return;
+  }
+  
+  if (pasos == 0) {
+    Serial.println("Y: 0");
+    return;
+  }
+  
+  bool direccion = (pasos > 0);
+  if (!direccion) {
     pasos = -pasos;
   }
   
+  digitalWrite(dirPinY, direccion ? HIGH : LOW);
+  Serial.print("Moviendo Y: ");
+  Serial.print(direccion ? "+" : "-");
+  Serial.println(pasos);
+  
   for (long i = 0; i < pasos; i++) {
-    if (emergencyStop) return;
-    
-    // Verificar límites
-    if (digitalRead(limitMinY) == LOW || digitalRead(limitMaxY) == LOW) {
-      Serial.println("Limite Y alcanzado");
+    if (emergencyStop) {
+      Serial.println("Movimiento Y interrumpido: Paro de emergencia");
       return;
     }
     
+    // Verificar límites antes de mover
+    if (digitalRead(limitMinY) == LOW) {
+      Serial.println("Limite Y Min alcanzado");
+      return;
+    }
+    if (digitalRead(limitMaxY) == LOW) {
+      Serial.println("Limite Y Max alcanzado");
+      return;
+    }
+    
+    // Ejecutar paso
     digitalWrite(stepPinY, HIGH);
     delayMicroseconds(1000);
     digitalWrite(stepPinY, LOW);
     delayMicroseconds(1000);
     
-    posY += (digitalRead(dirPinY) == HIGH) ? 1 : -1;
+    // Actualizar posición
+    posY += direccion ? 1 : -1;
   }
   
   Serial.print("Y: ");
@@ -169,28 +218,50 @@ void moverEjeY(long pasos) {
 }
 
 void moverEjeZ(long pasos) {
-  if (pasos > 0) {
-    digitalWrite(dirPinZ, HIGH);
-  } else {
-    digitalWrite(dirPinZ, LOW);
+  if (emergencyStop) {
+    Serial.println("Error: Paro de emergencia activo");
+    return;
+  }
+  
+  if (pasos == 0) {
+    Serial.println("Z: 0");
+    return;
+  }
+  
+  bool direccion = (pasos > 0);
+  if (!direccion) {
     pasos = -pasos;
   }
   
+  digitalWrite(dirPinZ, direccion ? HIGH : LOW);
+  Serial.print("Moviendo Z: ");
+  Serial.print(direccion ? "+" : "-");
+  Serial.println(pasos);
+  
   for (long i = 0; i < pasos; i++) {
-    if (emergencyStop) return;
-    
-    // Verificar límites
-    if (digitalRead(limitMinZ) == LOW || digitalRead(limitMaxZ) == LOW) {
-      Serial.println("Limite Z alcanzado");
+    if (emergencyStop) {
+      Serial.println("Movimiento Z interrumpido: Paro de emergencia");
       return;
     }
     
+    // Verificar límites antes de mover
+    if (digitalRead(limitMinZ) == LOW) {
+      Serial.println("Limite Z Min alcanzado");
+      return;
+    }
+    if (digitalRead(limitMaxZ) == LOW) {
+      Serial.println("Limite Z Max alcanzado");
+      return;
+    }
+    
+    // Ejecutar paso
     digitalWrite(stepPinZ, HIGH);
     delayMicroseconds(1000);
     digitalWrite(stepPinZ, LOW);
     delayMicroseconds(1000);
     
-    posZ += (digitalRead(dirPinZ) == HIGH) ? 1 : -1;
+    // Actualizar posición
+    posZ += direccion ? 1 : -1;
   }
   
   Serial.print("Z: ");

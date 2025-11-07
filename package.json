@@ -51,8 +51,17 @@
       "node_modules/**/*"
     ],
     "win": {
-      "target": "dir",
+      "target": "nsis",
       "icon": "src/public/assets/dora-logo.png"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "perMachine": true,
+      "allowElevation": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "artifactName": "SILAR-System-Setup-${version}.exe"
     }
   }
 }

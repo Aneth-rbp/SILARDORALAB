@@ -219,6 +219,8 @@ class SilarApp {
             
             this.socket.on('connect', () => {
                 this.updateSystemStatus({ websocket: true });
+                // Verificar estado inmediatamente al conectar
+                this.checkSystemStatus();
             });
 
             this.socket.on('disconnect', (reason) => {
@@ -239,6 +241,21 @@ class SilarApp {
 
             this.socket.on('arduino-data', (data) => {
                 this.handleArduinoData(data);
+            });
+
+            this.socket.on('arduino-connected', (data) => {
+                console.log('✅ Arduino conectado vía WebSocket:', data);
+                this.updateSystemStatus({ arduino: true });
+            });
+
+            this.socket.on('arduino-disconnected', () => {
+                console.log('❌ Arduino desconectado vía WebSocket');
+                this.updateSystemStatus({ arduino: false });
+            });
+
+            this.socket.on('arduino-error', (error) => {
+                console.error('❌ Error de Arduino vía WebSocket:', error);
+                this.updateSystemStatus({ arduino: false });
             });
 
             this.socket.on('process-update', (data) => {
@@ -355,14 +372,16 @@ class SilarApp {
         const dbStatus = document.getElementById('db-status');
         
         if (arduinoStatus) {
-            const isConnected = status.arduino || this.isDemoMode;
+            // Usar el estado combinado, no solo el parámetro
+            const isConnected = this.systemStatus.arduino || this.isDemoMode;
             arduinoStatus.className = `status-button ${isConnected ? 'arduino-btn connected' : 'arduino-btn disconnected'}`;
             arduinoStatus.innerHTML = `<i class="bi bi-usb"></i> Arduino`;
             arduinoStatus.title = `Arduino: ${isConnected ? 'Conectado' : 'Desconectado'}`;
         }
         
         if (dbStatus) {
-            const isConnected = status.database || this.isDemoMode;
+            // Usar el estado combinado, no solo el parámetro
+            const isConnected = this.systemStatus.database || this.isDemoMode;
             dbStatus.className = `status-button ${isConnected ? 'mysql-btn connected' : 'mysql-btn disconnected'}`;
             dbStatus.innerHTML = `<i class="bi bi-database"></i> MySQL`;
             dbStatus.title = `MySQL: ${isConnected ? 'Conectado' : 'Desconectado'}`;
@@ -371,7 +390,8 @@ class SilarApp {
         // Actualizar indicador de WebSocket si existe
         const wsStatus = document.getElementById('websocket-status');
         if (wsStatus) {
-            const isConnected = status.websocket || this.isDemoMode;
+            // Usar el estado combinado, no solo el parámetro
+            const isConnected = this.systemStatus.websocket || this.isDemoMode;
             wsStatus.className = `status-button ${isConnected ? 'websocket-btn connected' : 'websocket-btn disconnected'}`;
             wsStatus.innerHTML = `<i class="bi bi-wifi"></i> WebSocket`;
             wsStatus.title = `WebSocket: ${isConnected ? 'Conectado' : 'Desconectado'}`;
