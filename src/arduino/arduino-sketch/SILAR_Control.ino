@@ -1,3 +1,6 @@
+#include <AccelStepper.h>
+#include <ezButton.h>
+
 /*
  * Sistema de Control SILAR - Motores Stepper   
  * Control de ejes Y y Z con límites y home
@@ -15,27 +18,27 @@
 // ============================================
 // PINES DE CONTROL - EJE Y (STEPPER Y)
 // ============================================
-const int dirPinY = 2;        // DIR+ para driver Y (D2 - PE4)
-const int stepPinY = 3;       // PUL+ para driver Y (D3 - PE5)
+const int stepPinY = 2;       // PUL+ para driver Y (D2 - PE4)
+const int dirPinY = 3;        // DIR+ para driver Y (D3 - PE5)
 const int enablePinY = 4;     // ENA+ para driver Y (D4 - PG5)
-const int homePinY = 9;       // Home Y - LS 1 (D9 - PH6)
-const int limitMinY = 10;     // Límite mínimo Y - LS 2 (D10 - PB4)
-const int limitMaxY = 11;     // Límite máximo Y - LS 3 (D11 - PB5)
+const int homePinY = 17;      // Home Y - lsYi (D17) - También funciona como límite inicial/mínimo
+const int limitMinY = 17;     // Límite mínimo Y - Mismo que homePinY (lsYi)
+const int limitMaxY = 16;     // Límite máximo Y - lsYf (D16)
 
 // ============================================
 // PINES DE CONTROL - EJE Z (STEPPER Z)
 // ============================================
-const int dirPinZ = 5;        // DIR+ para driver Z (D5 - PE3)
-const int stepPinZ = 6;       // PUL+ para driver Z (D6 - PH3)
+const int stepPinZ = 5;       // PUL+ para driver Z (D5 - PE3)
+const int dirPinZ = 6;        // DIR+ para driver Z (D6 - PH3)
 const int enablePinZ = 7;     // ENA+ para driver Z (D7 - PH4)
-const int homePinZ = 12;      // Home Z - LS 4 (D12 - PB6)
-const int limitMinZ = 13;     // Límite mínimo Z - LS 5 (D13 - PB7)
-const int limitMaxZ = 8;      // Límite máximo Z - LS 6 (D8 - PH5)
+const int homePinZ = 14;      // Home Z - lsZi (D14) - También funciona como límite inicial/mínimo
+const int limitMinZ = 14;     // Límite mínimo Z - Mismo que homePinZ (lsZi)
+const int limitMaxZ = 15;     // Límite máximo Z - lsZf (D15)
 
 // ============================================
 // PINES DE ENTRADA - SEGURIDAD
 // ============================================
-const int emergencyPin = A0;  // Paro de emergencia (A0/D54 - PF0)
+const int emergencyPin = 19;   // Paro de emergencia - eStop (D19)
 
 // ============================================
 // PINES DE SALIDA - ACCESORIOS
@@ -44,10 +47,31 @@ const int lampPin = A1;       // Lámpara interior (A1/D55 - PF1)
 const int fanPin = A2;        // Extractor/Ventilador (A2/D56 - PF2)
 
 // Variables de estado
-int modo = 0; // 0=Manual, 1=Automatico
+int modo = 1; // 0=Manual, 1=Automatico
 bool emergencyStop = false;
 long posY = 0;
 long posZ = 0;
+
+// Instancias de motores con AccelStepper (modo DRIVER = señales step/dir)
+AccelStepper stepperY(AccelStepper::DRIVER, stepPinY, dirPinY);
+AccelStepper stepperZ(AccelStepper::DRIVER, stepPinZ, dirPinZ);
+
+// Parámetros de movimiento predeterminados
+const float MAX_SPEED_Y = 2000.0f;      // pasos por segundo
+const float MAX_ACCEL_Y = 1500.0f;      // pasos por segundo^2
+const float MAX_SPEED_Z = 2000.0f;
+const float MAX_ACCEL_Z = 1500.0f;
+const unsigned int MIN_PULSE_WIDTH_US = 800; // Duración mínima de pulso STEP (µs) según documentación eléctrica
+const unsigned long HOME_TIMEOUT_MS = 20000UL; // Tiempo máximo para encontrar cada home
+
+// Botones con rebote (finales de carrera y paro)
+ezButton homeSwitchY(homePinY);
+ezButton limitMinSwitchY(limitMinY);
+ezButton limitMaxSwitchY(limitMaxY);
+ezButton homeSwitchZ(homePinZ);
+ezButton limitMinSwitchZ(limitMinZ);
+ezButton limitMaxSwitchZ(limitMaxZ);
+ezButton emergencySwitch(emergencyPin);
 
 // Variables para proceso automático
 bool procesoActivo = false;
@@ -111,9 +135,34 @@ void setup() {
   digitalWrite(lampPin, LOW);
   digitalWrite(fanPin, LOW);
   
-  // Habilitar motores (LOW = habilitado para la mayoría de drivers)
-  digitalWrite(enablePinY, LOW);
-  digitalWrite(enablePinZ, LOW);
+  // Habilitar motores (HIGH = habilitado para los drivers instalados)
+  digitalWrite(enablePinY, HIGH);
+  digitalWrite(enablePinZ, HIGH);
+
+  stepperY.setMaxSpeed(MAX_SPEED_Y);
+  stepperY.setAcceleration(MAX_ACCEL_Y);
+  stepperY.setMinPulseWidth(MIN_PULSE_WIDTH_US);
+  stepperY.setEnablePin(enablePinY);
+  stepperY.setPinsInverted(false, false, true); 
+  stepperY.enableOutputs();
+  stepperY.setCurrentPosition(posY);
+
+  stepperZ.setMaxSpeed(MAX_SPEED_Z);
+  stepperZ.setAcceleration(MAX_ACCEL_Z);
+  stepperZ.setMinPulseWidth(MIN_PULSE_WIDTH_US);
+  stepperZ.setEnablePin(enablePinZ);
+  stepperZ.setPinsInverted(false, false, true);
+  stepperZ.enableOutputs();
+  stepperZ.setCurrentPosition(posZ);
+
+  // Configurar debounce
+  homeSwitchY.setDebounceTime(50);
+  limitMinSwitchY.setDebounceTime(50);
+  limitMaxSwitchY.setDebounceTime(50);
+  homeSwitchZ.setDebounceTime(50);
+  limitMinSwitchZ.setDebounceTime(50);
+  limitMaxSwitchZ.setDebounceTime(50);
+  emergencySwitch.setDebounceTime(50);
   
   Serial.println("Sistema SILAR Iniciado");
   Serial.println("Hardware: Arduino Mega 2560 Rev3");
@@ -121,25 +170,39 @@ void setup() {
 }
 
 void loop() {
+  // Actualizar estados de los botones
+  homeSwitchY.loop();
+  limitMinSwitchY.loop();
+  limitMaxSwitchY.loop();
+  homeSwitchZ.loop();
+  limitMinSwitchZ.loop();
+  limitMaxSwitchZ.loop();
+  emergencySwitch.loop();
+
   // Verificar paro de emergencia
-  if (digitalRead(emergencyPin) == LOW) {
+  bool emergenciaActiva = (emergencySwitch.getState() == LOW);
+
+  if (emergenciaActiva) {
     if (!emergencyStop) {
       emergencyStop = true;
       procesoActivo = false;
       procesoPausado = false;
-      digitalWrite(enablePinY, HIGH);
-      digitalWrite(enablePinZ, HIGH);
+      digitalWrite(enablePinY, LOW);
+      digitalWrite(enablePinZ, LOW);
       Serial.println("PARO DE EMERGENCIA ACTIVADO");
     }
     return;
-  } else {
-    if (emergencyStop) {
-      emergencyStop = false;
-      digitalWrite(enablePinY, LOW);
-      digitalWrite(enablePinZ, LOW);
-      Serial.println("Paro de emergencia desactivado");
-    }
   }
+
+  if (emergencyStop) {
+      emergencyStop = false;
+      digitalWrite(enablePinY, HIGH);
+      digitalWrite(enablePinZ, HIGH);
+      Serial.println("Paro de emergencia desactivado");
+  }
+
+  stepperY.run();
+  stepperZ.run();
   
   // Ejecutar proceso automático si está activo y no está pausado
   if (procesoActivo && !procesoPausado && !emergencyStop && modo == 1) {
@@ -216,6 +279,15 @@ void loop() {
     }
     else if (comando == "STATUS") {
       enviarStatus();
+    }
+    else if (comando == "HW_STATUS") {
+      enviarStatusHardware();
+    }
+    else if (comando == "STEP_TEST_Y") {
+      pruebaStepManual(stepPinY, dirPinY);
+    }
+    else if (comando == "STEP_TEST_Z") {
+      pruebaStepManual(stepPinZ, dirPinZ);
     }
     else {
       Serial.print("Error: Comando desconocido: ");
@@ -527,71 +599,100 @@ void moverEjeZVelocidad(long pasos, long velocidadMicrosegundos) {
     Serial.println("Error: Paro de emergencia activo");
     return;
   }
-  
+
   if (pasos == 0) return;
-  
-  bool direccion = (pasos > 0);
-  if (!direccion) {
-    pasos = -pasos;
-  }
-  
-  digitalWrite(dirPinZ, direccion ? HIGH : LOW);
-  
-  for (long i = 0; i < pasos; i++) {
-    if (emergencyStop || !procesoActivo || procesoPausado) {
+
+  bool direccionPositiva = (pasos > 0);
+  long objetivo = posZ + pasos;
+
+  // Convertir microsegundos entre flancos a pasos/segundo (aproximado)
+  long microsClamped = velocidadMicrosegundos <= 0 ? 200 : velocidadMicrosegundos;
+  float velocidadTarget = 1000000.0f / (2.0f * microsClamped); // dos flancos por ciclo
+  if (velocidadTarget > MAX_SPEED_Z) velocidadTarget = MAX_SPEED_Z;
+  if (velocidadTarget < 10.0f) velocidadTarget = 10.0f;
+
+  float aceleracion = velocidadTarget * 2.0f;
+  if (aceleracion < 100.0f) aceleracion = 100.0f;
+
+  float velocidadAnterior = stepperZ.maxSpeed();
+  float aceleracionAnterior = stepperZ.acceleration();
+
+  stepperZ.setMaxSpeed(velocidadTarget);
+  stepperZ.setAcceleration(aceleracion);
+  stepperZ.moveTo(objetivo);
+
+  bool procesoEnCurso = procesoActivo;
+
+  while (stepperZ.distanceToGo() != 0) {
+    homeSwitchZ.loop();
+    limitMinSwitchZ.loop();
+    limitMaxSwitchZ.loop();
+    emergencySwitch.loop();
+
+    if (emergencyStop || (procesoActivo && procesoPausado)) {
       Serial.println("Movimiento Z interrumpido");
-      return;
+      stepperZ.stop();
+      posZ = stepperZ.currentPosition();
+      stepperZ.setCurrentPosition(posZ);
+      break;
     }
-    
-    // Verificar límites
-    if (digitalRead(limitMinZ) == LOW && !direccion) {
-      Serial.println("Limite Z Min alcanzado");
-      return;
+    if (procesoEnCurso && !procesoActivo) {
+      Serial.println("Movimiento Z cancelado");
+      stepperZ.stop();
+      posZ = stepperZ.currentPosition();
+      stepperZ.setCurrentPosition(posZ);
+      break;
     }
-    if (digitalRead(limitMaxZ) == LOW && direccion) {
+
+    // Verificar límites (igual que código anterior: límite inicial = home = límite mínimo)
+    if (direccionPositiva && limitMaxSwitchZ.getState() == LOW) {
       Serial.println("Limite Z Max alcanzado");
-      return;
+      stepperZ.stop();
+      posZ = stepperZ.currentPosition();
+      stepperZ.setCurrentPosition(posZ);
+      break;
     }
-    
-    // Ejecutar paso
-    digitalWrite(stepPinZ, HIGH);
-    delayMicroseconds(velocidadMicrosegundos);
-    digitalWrite(stepPinZ, LOW);
-    delayMicroseconds(velocidadMicrosegundos);
-    
-    // Actualizar posición
-    posZ += direccion ? 1 : -1;
+    // En dirección negativa: verificar home (límite inicial) como límite mínimo (lsZi)
+    if (!direccionPositiva && homeSwitchZ.getState() == LOW) {
+      Serial.println("Limite Z Min alcanzado");
+      stepperZ.stop();
+      posZ = stepperZ.currentPosition();
+      stepperZ.setCurrentPosition(posZ);
+      break;
+    }
+
+    stepperZ.run();
   }
+
+  posZ = stepperZ.currentPosition();
+  stepperZ.setCurrentPosition(posZ);
+
+  // Restaurar parámetros originales
+  stepperZ.setMaxSpeed(velocidadAnterior);
+  stepperZ.setAcceleration(aceleracionAnterior);
 }
 
 void ejecutarHome() {
-  Serial.println("Iniciando secuencia HOME");
+  Serial.println("Sending HOME");
   
-  // Home Eje Y
-  Serial.println("Buscando Home Y");
-  digitalWrite(dirPinY, LOW); // Dirección hacia home
-  while (digitalRead(homePinY) == HIGH) {
-    if (emergencyStop) return;
-    digitalWrite(stepPinY, HIGH);
-    delayMicroseconds(1000);
-    digitalWrite(stepPinY, LOW);
-    delayMicroseconds(1000);
+  if (emergencyStop) {
+    Serial.println("Error: Paro de emergencia activo");
+    return;
   }
+  
+  long distanceZ = -200;
+  posZ = 0;  // Actualizar variable global
+  stepperZ.setCurrentPosition(0);  // Establecer posición en 0 antes de mover
+  moverEjeZ(distanceZ);
+  
+  long distanceY = -800;
+  posY = 0;  // Actualizar variable global
+  stepperY.setCurrentPosition(0);  // Establecer posición en 0 antes de mover
+  moverEjeY(distanceY);
   posY = 0;
-  Serial.println("Home Y encontrado");
-  
-  // Home Eje Z
-  Serial.println("Buscando Home Z");
-  digitalWrite(dirPinZ, LOW);
-  while (digitalRead(homePinZ) == HIGH) {
-    if (emergencyStop) return;
-    digitalWrite(stepPinZ, HIGH);
-    delayMicroseconds(1000);
-    digitalWrite(stepPinZ, LOW);
-    delayMicroseconds(1000);
-  }
   posZ = 0;
-  Serial.println("Home Z encontrado");
+  stepperY.setCurrentPosition(0);
+  stepperZ.setCurrentPosition(0);
   
   Serial.println("Secuencia HOME completada");
 }
@@ -603,46 +704,54 @@ void moverEjeY(long pasos) {
   }
   
   if (pasos == 0) {
-    Serial.println("Y: 0");
+    Serial.print("Y: ");
+    Serial.println(posY);
     return;
   }
   
-  bool direccion = (pasos > 0);
-  if (!direccion) {
-    pasos = -pasos;
-  }
-  
-  digitalWrite(dirPinY, direccion ? HIGH : LOW);
+  bool direccionPositiva = (pasos > 0);
+  long objetivo = posY + pasos;
+
+  stepperY.setMaxSpeed(MAX_SPEED_Y);
+  stepperY.setAcceleration(MAX_ACCEL_Y);
+
   Serial.print("Moviendo Y: ");
-  Serial.print(direccion ? "+" : "-");
-  Serial.println(pasos);
-  
-  for (long i = 0; i < pasos; i++) {
+  Serial.print(direccionPositiva ? "+" : "-");
+  Serial.println(labs(pasos));
+
+  stepperY.moveTo(objetivo);
+
+  while (stepperY.distanceToGo() != 0) {
+    homeSwitchY.loop();
+    limitMinSwitchY.loop();
+    limitMaxSwitchY.loop();
+    emergencySwitch.loop();
+
     if (emergencyStop) {
       Serial.println("Movimiento Y interrumpido: Paro de emergencia");
-      return;
+      stepperY.stop();
+      break;
     }
-    
-    // Verificar límites antes de mover
-    if (digitalRead(limitMinY) == LOW) {
-      Serial.println("Limite Y Min alcanzado");
-      return;
-    }
-    if (digitalRead(limitMaxY) == LOW) {
+
+    // Verificar límites (igual que código anterior: límite inicial = home = límite mínimo)
+    if (direccionPositiva && limitMaxSwitchY.getState() == LOW) {
       Serial.println("Limite Y Max alcanzado");
-      return;
+      stepperY.stop();
+      break;
     }
-    
-    // Ejecutar paso
-    digitalWrite(stepPinY, HIGH);
-    delayMicroseconds(1000);
-    digitalWrite(stepPinY, LOW);
-    delayMicroseconds(1000);
-    
-    // Actualizar posición
-    posY += direccion ? 1 : -1;
+    // En dirección negativa: verificar home (límite inicial) 
+    if (!direccionPositiva && homeSwitchY.getState() == LOW) {
+      Serial.println("Limite Y Min alcanzado");
+      stepperY.stop();
+      break;
+    }
+
+    stepperY.run();
   }
-  
+
+  posY = stepperY.currentPosition();
+  stepperY.setCurrentPosition(posY);
+
   Serial.print("Y: ");
   Serial.println(posY);
 }
@@ -654,46 +763,54 @@ void moverEjeZ(long pasos) {
   }
   
   if (pasos == 0) {
-    Serial.println("Z: 0");
+    Serial.print("Z: ");
+    Serial.println(posZ);
     return;
   }
   
-  bool direccion = (pasos > 0);
-  if (!direccion) {
-    pasos = -pasos;
-  }
-  
-  digitalWrite(dirPinZ, direccion ? HIGH : LOW);
+  bool direccionPositiva = (pasos > 0);
+  long objetivo = posZ + pasos;
+
+  stepperZ.setMaxSpeed(MAX_SPEED_Z);
+  stepperZ.setAcceleration(MAX_ACCEL_Z);
+
   Serial.print("Moviendo Z: ");
-  Serial.print(direccion ? "+" : "-");
-  Serial.println(pasos);
-  
-  for (long i = 0; i < pasos; i++) {
+  Serial.print(direccionPositiva ? "+" : "-");
+  Serial.println(labs(pasos));
+
+  stepperZ.moveTo(objetivo);
+
+  while (stepperZ.distanceToGo() != 0) {
+    homeSwitchZ.loop();
+    limitMinSwitchZ.loop();
+    limitMaxSwitchZ.loop();
+    emergencySwitch.loop();
+
     if (emergencyStop) {
       Serial.println("Movimiento Z interrumpido: Paro de emergencia");
-      return;
+      stepperZ.stop();
+      break;
     }
-    
-    // Verificar límites antes de mover
-    if (digitalRead(limitMinZ) == LOW) {
-      Serial.println("Limite Z Min alcanzado");
-      return;
-    }
-    if (digitalRead(limitMaxZ) == LOW) {
+
+    // Verificar límites (igual que código anterior: límite inicial = home = límite mínimo)
+    if (direccionPositiva && limitMaxSwitchZ.getState() == LOW) {
       Serial.println("Limite Z Max alcanzado");
-      return;
+      stepperZ.stop();
+      break;
     }
-    
-    // Ejecutar paso
-    digitalWrite(stepPinZ, HIGH);
-    delayMicroseconds(1000);
-    digitalWrite(stepPinZ, LOW);
-    delayMicroseconds(1000);
-    
-    // Actualizar posición
-    posZ += direccion ? 1 : -1;
+    // En dirección negativa: verificar home (límite inicial)
+    if (!direccionPositiva && homeSwitchZ.getState() == LOW) {
+      Serial.println("Limite Z Min alcanzado");
+      stepperZ.stop();
+      break;
+    }
+
+    stepperZ.run();
   }
-  
+
+  posZ = stepperZ.currentPosition();
+  stepperZ.setCurrentPosition(posZ);
+
   Serial.print("Z: ");
   Serial.println(posZ);
 }
@@ -732,4 +849,42 @@ void enviarStatus() {
   Serial.print(digitalRead(lampPin) == HIGH ? "1" : "0");
   Serial.print(",Fan=");
   Serial.println(digitalRead(fanPin) == HIGH ? "1" : "0");
+}
+
+void pruebaStepManual(int pinStep, int pinDir) {
+  Serial.println("STEP_TEST: Iniciando");
+  digitalWrite(pinDir, HIGH);
+  for (int i = 0; i < 10; i++) {
+    digitalWrite(pinStep, HIGH);
+    delay(200);
+    digitalWrite(pinStep, LOW);
+    delay(200);
+  }
+  digitalWrite(pinDir, LOW);
+  for (int i = 0; i < 10; i++) {
+    digitalWrite(pinStep, HIGH);
+    delay(200);
+    digitalWrite(pinStep, LOW);
+    delay(200);
+  }
+  Serial.println("STEP_TEST: Finalizado");
+}
+void enviarStatusHardware() {
+  Serial.print("HW_STATUS:");
+  Serial.print("EnableY=");
+  Serial.print(digitalRead(enablePinY) == HIGH ? "HIGH" : "LOW");
+  Serial.print(",EnableZ=");
+  Serial.print(digitalRead(enablePinZ) == HIGH ? "HIGH" : "LOW");
+  Serial.print(",DirY=");
+  Serial.print(digitalRead(dirPinY) == HIGH ? "HIGH" : "LOW");
+  Serial.print(",DirZ=");
+  Serial.print(digitalRead(dirPinZ) == HIGH ? "HIGH" : "LOW");
+  Serial.print(",StepY=");
+  Serial.print(digitalRead(stepPinY) == HIGH ? "HIGH" : "LOW");
+  Serial.print(",StepZ=");
+  Serial.print(digitalRead(stepPinZ) == HIGH ? "HIGH" : "LOW");
+  Serial.print(",LampPin=");
+  Serial.print(digitalRead(lampPin) == HIGH ? "HIGH" : "LOW");
+  Serial.print(",FanPin=");
+  Serial.println(digitalRead(fanPin) == HIGH ? "HIGH" : "LOW");
 }
