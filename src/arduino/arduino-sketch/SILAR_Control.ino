@@ -103,11 +103,11 @@ struct RecipeParams {
 } recipeParams;
 
 // Posiciones Y para cada solución (en pasos desde home)
-// Estos valores deben calibrarse según el hardware real
-const long POS_Y1 = 0;      // Posición Y para solución 1
-const long POS_Y2 = 5000;  // Posición Y para solución 2 (ajustar según hardware)
-const long POS_Y3 = 10000; // Posición Y para solución 3 (ajustar según hardware)
-const long POS_Y4 = 15000; // Posición Y para solución 4 (ajustar según hardware)
+// Distribuidos uniformemente de 0 a 12600 (límite máximo físico detectado a 14027 pasos)
+const long POS_Y1 = 0;      // Posición Y para solución 1 (Vaso 1)
+const long POS_Y2 = 4200;   // Posición Y para solución 2 (Vaso 2)
+const long POS_Y3 = 8400;   // Posición Y para solución 3 (Vaso 3)
+const long POS_Y4 = 12600;  // Posición Y para solución 4 (Vaso 4)
 
 void setup() {
   Serial.begin(9600);
@@ -152,7 +152,7 @@ void setup() {
   stepperZ.setMaxSpeed(MAX_SPEED_Z);
   stepperZ.setAcceleration(MAX_ACCEL_Z);
   stepperZ.setMinPulseWidth(MIN_PULSE_WIDTH_US);
-  stepperZ.setPinsInverted(true, false, false); // Invertir dirección física de Z: Z- baja y Z+ sube
+  // Usar sentido físico nativo: Z+ baja (soluciones) y Z- sube (home)
   stepperZ.setCurrentPosition(posZ);
 
   // Configurar debounce
@@ -572,8 +572,8 @@ void ejecutarInmersion(long posYTarget, int tiempoEspera, int numInmersion) {
   
   if (!procesoActivo || procesoPausado || emergencyStop) return;
   
-  // Bajar Z para inmersión
-  moverEjeZVelocidad(-recipeParams.dippingLength, recipeParams.dipSpeed);
+  // Bajar Z para inmersión (Z+ baja físicamente)
+  moverEjeZVelocidad(recipeParams.dippingLength, recipeParams.dipSpeed);
   
   if (!procesoActivo || procesoPausado || emergencyStop) return;
   
@@ -588,8 +588,8 @@ void ejecutarInmersion(long posYTarget, int tiempoEspera, int numInmersion) {
   
   if (!procesoActivo || procesoPausado || emergencyStop) return;
   
-  // Subir Z
-  moverEjeZVelocidad(recipeParams.dippingLength, recipeParams.dipSpeed);
+  // Subir Z (Z- sube físicamente)
+  moverEjeZVelocidad(-recipeParams.dippingLength, recipeParams.dipSpeed);
   
   Serial.print("INMERSION_COMPLETADA: Y");
   Serial.println(numInmersion);
@@ -693,15 +693,15 @@ void moverEjeZVelocidad(long pasos, long velocidadMicrosegundos) {
     }
 
     // 3. Verificar límites físicos según dirección
-    // Subir (Z+) → verificar homeSwitchZ (switch físico en pin 14)
-    if (direccionPositiva && homeSwitchZ.getState() == HIGH) {
+    // Subir (Z-) → verificar homeSwitchZ (switch físico en pin 14)
+    if (!direccionPositiva && homeSwitchZ.getState() == HIGH) {
       Serial.println("Limite Z Home alcanzado");
       stepperZ.stop();
       posZ = stepperZ.currentPosition();
       stepperZ.setCurrentPosition(posZ);
       break;
     }
-    // Bajar (Z-) → AccelStepper para en el objetivo exacto (no hay switch inferior físico)
+    // Bajar (Z+) → AccelStepper para en el objetivo exacto (no hay switch inferior físico)
 
     stepperZ.run();
   }
@@ -727,12 +727,12 @@ void ejecutarHome() {
   digitalWrite(enablePinZ, LOW);
 
   // --- Home Z ---
-  // Mueve Z en la dirección del home (+) hasta que el switch se active
+  // Mueve Z en la dirección del home (-) hasta que el switch se active (Z- sube físicamente)
   posZ = 0;
   stepperZ.setCurrentPosition(0);
   stepperZ.setMaxSpeed(MAX_SPEED_Z * 0.5); // Velocidad reducida para home
   stepperZ.setAcceleration(MAX_ACCEL_Z);
-  stepperZ.moveTo(4000); // Distancia máxima de búsqueda (Aumentado para asegurar que llegue desde abajo)
+  stepperZ.moveTo(-4000); // Distancia máxima de búsqueda (UP es negativo)
   while (stepperZ.distanceToGo() != 0) {
     emergencySwitch.loop();
     homeSwitchZ.loop();
@@ -742,9 +742,9 @@ void ejecutarHome() {
     }
     stepperZ.run();
   }
-  // Back-off: retroceder para liberar el switch (DOWN es negativo)
+  // Back-off: retroceder para liberar el switch (DOWN es positivo)
   stepperZ.setCurrentPosition(0);
-  stepperZ.moveTo(-150); // Alejar del switch (DOWN)
+  stepperZ.moveTo(150); // Alejar del switch (DOWN)
   while (stepperZ.distanceToGo() != 0) {
     stepperZ.run();
   }
@@ -924,13 +924,13 @@ void moverEjeZ(long pasos) {
     }
 
     // 3. Verificar límites físicos
-    // Subir (Z+) → verificar homeSwitchZ (switch físico en pin 14)
-    if (direccionPositiva && homeSwitchZ.getState() == HIGH) {
+    // Subir (Z-) → verificar homeSwitchZ (switch físico en pin 14)
+    if (!direccionPositiva && homeSwitchZ.getState() == HIGH) {
       Serial.println("Limite Z Home alcanzado");
       stepperZ.stop();
       break;
     }
-    // Bajar (Z-) → AccelStepper para en el objetivo exacto (no hay switch inferior físico)
+    // Bajar (Z+) → AccelStepper para en el objetivo exacto (no hay switch inferior físico)
 
     stepperZ.run();
   }
