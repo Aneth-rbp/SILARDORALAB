@@ -152,7 +152,7 @@ void setup() {
   stepperZ.setMaxSpeed(MAX_SPEED_Z);
   stepperZ.setAcceleration(MAX_ACCEL_Z);
   stepperZ.setMinPulseWidth(MIN_PULSE_WIDTH_US);
-  // Sin setEnablePin ni setPinsInverted: control manual del pin ENA
+  stepperZ.setPinsInverted(true, false, false); // Invertir dirección física de Z: Z- baja y Z+ sube
   stepperZ.setCurrentPosition(posZ);
 
   // Configurar debounce
@@ -688,8 +688,8 @@ void moverEjeZVelocidad(long pasos, long velocidadMicrosegundos) {
       break;
     }
 
-    // 3. Verificar límites físicos según dirección (CORREGIDO)
-    // En dirección positiva (SUBIR, hacia Home en pin 14): verificar homeSwitchZ
+    // 3. Verificar límites físicos según dirección (CORREGIDO: Z+ sube y Z- baja)
+    // Dirección positiva (Z+ / SUBIR hacia Home): verificar homeSwitchZ (pin 14)
     if (direccionPositiva && homeSwitchZ.getState() == HIGH) {
       Serial.println("Limite Z Max (Home) alcanzado");
       stepperZ.stop();
@@ -697,7 +697,7 @@ void moverEjeZVelocidad(long pasos, long velocidadMicrosegundos) {
       stepperZ.setCurrentPosition(posZ);
       break;
     }
-    // En dirección negativa (BAJAR, hacia las soluciones en pin 15): verificar limitMaxSwitchZ
+    // Dirección negativa (Z- / BAJAR hacia las soluciones): verificar limitMaxSwitchZ (pin 15)
     if (!direccionPositiva && limitMaxSwitchZ.getState() == HIGH) {
       Serial.println("Limite Z Min (Solucion) alcanzado");
       stepperZ.stop();
@@ -730,12 +730,12 @@ void ejecutarHome() {
   digitalWrite(enablePinZ, LOW);
 
   // --- Home Z ---
-  // Mueve Z en la dirección del home (-) hasta que el switch se active
+  // Mueve Z en la dirección del home (+) hasta que el switch se active
   posZ = 0;
   stepperZ.setCurrentPosition(0);
   stepperZ.setMaxSpeed(MAX_SPEED_Z * 0.5); // Velocidad reducida para home
   stepperZ.setAcceleration(MAX_ACCEL_Z);
-  stepperZ.moveTo(-1000); // Distancia máxima de búsqueda
+  stepperZ.moveTo(4000); // Distancia máxima de búsqueda (Aumentado para asegurar que llegue desde abajo)
   while (stepperZ.distanceToGo() != 0) {
     emergencySwitch.loop();
     homeSwitchZ.loop();
@@ -745,9 +745,9 @@ void ejecutarHome() {
     }
     stepperZ.run();
   }
-  // Back-off: retroceder para liberar el switch
+  // Back-off: retroceder para liberar el switch (DOWN es negativo)
   stepperZ.setCurrentPosition(0);
-  stepperZ.moveTo(150); // Alejar del switch
+  stepperZ.moveTo(-150); // Alejar del switch (DOWN)
   while (stepperZ.distanceToGo() != 0) {
     stepperZ.run();
   }
@@ -762,7 +762,7 @@ void ejecutarHome() {
   stepperY.setCurrentPosition(0);
   stepperY.setMaxSpeed(MAX_SPEED_Y * 0.5); // Velocidad reducida para home
   stepperY.setAcceleration(MAX_ACCEL_Y);
-  stepperY.moveTo(-5000); // Distancia máxima de búsqueda
+  stepperY.moveTo(-25000); // Distancia máxima de búsqueda (Aumentado porque el eje Y es de 15000+ pasos)
   while (stepperY.distanceToGo() != 0) {
     emergencySwitch.loop();
     homeSwitchY.loop();
@@ -926,14 +926,14 @@ void moverEjeZ(long pasos) {
       break;
     }
 
-    // 3. Verificar límites físicos (CORREGIDO: igual que moverEjeZVelocidad)
-    // Subir (positivo) → para en Home (switch de arriba, pin 14)
+    // 3. Verificar límites físicos (CORREGIDO: Z+ sube y Z- baja)
+    // Dirección positiva (Z+ / SUBIR hacia Home): verificar homeSwitchZ (pin 14)
     if (direccionPositiva && homeSwitchZ.getState() == HIGH) {
       Serial.println("Limite Z Max (Home) alcanzado");
       stepperZ.stop();
       break;
     }
-    // Bajar (negativo) → para en limite inferior (pin 15)
+    // Dirección negativa (Z- / BAJAR hacia las soluciones): verificar limitMaxSwitchZ (pin 15)
     if (!direccionPositiva && limitMaxSwitchZ.getState() == HIGH) {
       Serial.println("Limite Z Min (Solucion) alcanzado");
       stepperZ.stop();
