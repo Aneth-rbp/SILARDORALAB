@@ -547,6 +547,10 @@ void ejecutarProcesoAutomatico() {
       digitalWrite(fanPin, LOW);
       Serial.println("VENTILADOR_DESACTIVADO");
     }
+
+    // Regresar a Home automáticamente al finalizar la receta exitosamente
+    Serial.println("PROCESO_FINALIZADO: Regresando a Home automaticamente...");
+    ejecutarHome();
   }
 }
 
@@ -688,23 +692,16 @@ void moverEjeZVelocidad(long pasos, long velocidadMicrosegundos) {
       break;
     }
 
-    // 3. Verificar límites físicos según dirección (CORREGIDO: Z+ sube y Z- baja)
-    // Dirección positiva (Z+ / SUBIR hacia Home): verificar homeSwitchZ (pin 14)
+    // 3. Verificar límites físicos según dirección
+    // Subir (Z+) → verificar homeSwitchZ (switch físico en pin 14)
     if (direccionPositiva && homeSwitchZ.getState() == HIGH) {
-      Serial.println("Limite Z Max (Home) alcanzado");
+      Serial.println("Limite Z Home alcanzado");
       stepperZ.stop();
       posZ = stepperZ.currentPosition();
       stepperZ.setCurrentPosition(posZ);
       break;
     }
-    // Dirección negativa (Z- / BAJAR hacia las soluciones): verificar limitMaxSwitchZ (pin 15)
-    if (!direccionPositiva && limitMaxSwitchZ.getState() == HIGH) {
-      Serial.println("Limite Z Min (Solucion) alcanzado");
-      stepperZ.stop();
-      posZ = stepperZ.currentPosition();
-      stepperZ.setCurrentPosition(posZ);
-      break;
-    }
+    // Bajar (Z-) → AccelStepper para en el objetivo exacto (no hay switch inferior físico)
 
     stepperZ.run();
   }
@@ -926,19 +923,14 @@ void moverEjeZ(long pasos) {
       break;
     }
 
-    // 3. Verificar límites físicos (CORREGIDO: Z+ sube y Z- baja)
-    // Dirección positiva (Z+ / SUBIR hacia Home): verificar homeSwitchZ (pin 14)
+    // 3. Verificar límites físicos
+    // Subir (Z+) → verificar homeSwitchZ (switch físico en pin 14)
     if (direccionPositiva && homeSwitchZ.getState() == HIGH) {
-      Serial.println("Limite Z Max (Home) alcanzado");
+      Serial.println("Limite Z Home alcanzado");
       stepperZ.stop();
       break;
     }
-    // Dirección negativa (Z- / BAJAR hacia las soluciones): verificar limitMaxSwitchZ (pin 15)
-    if (!direccionPositiva && limitMaxSwitchZ.getState() == HIGH) {
-      Serial.println("Limite Z Min (Solucion) alcanzado");
-      stepperZ.stop();
-      break;
-    }
+    // Bajar (Z-) → AccelStepper para en el objetivo exacto (no hay switch inferior físico)
 
     stepperZ.run();
   }
