@@ -142,3 +142,4 @@ Para verificar que todo funciona:
 La aplicación está configurada para iniciar automáticamente el servidor y conectarse al Arduino al iniciar.
 
 
+

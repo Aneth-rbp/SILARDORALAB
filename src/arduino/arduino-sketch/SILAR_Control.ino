@@ -52,6 +52,10 @@ bool emergencyStop = false;
 long posY = 0;
 long posZ = 0;
 
+// Convención del driver: ENA activo-LOW
+// LOW  = motor habilitado (driver activado)
+// HIGH = motor deshabilitado (driver desactivado)
+
 // Instancias de motores con AccelStepper (modo DRIVER = señales step/dir)
 AccelStepper stepperY(AccelStepper::DRIVER, stepPinY, dirPinY);
 AccelStepper stepperZ(AccelStepper::DRIVER, stepPinZ, dirPinZ);
@@ -135,24 +139,20 @@ void setup() {
   digitalWrite(lampPin, LOW);
   digitalWrite(fanPin, LOW);
   
-  // Habilitar motores (HIGH = habilitado para los drivers instalados)
-  digitalWrite(enablePinY, HIGH);
-  digitalWrite(enablePinZ, HIGH);
+  // Habilitar motores: LOW = habilitado (activo-LOW, igual que el código funcional previo)
+  digitalWrite(enablePinY, LOW);
+  digitalWrite(enablePinZ, LOW);
 
   stepperY.setMaxSpeed(MAX_SPEED_Y);
   stepperY.setAcceleration(MAX_ACCEL_Y);
   stepperY.setMinPulseWidth(MIN_PULSE_WIDTH_US);
-  stepperY.setEnablePin(enablePinY);
-  stepperY.setPinsInverted(false, false, true); 
-  stepperY.enableOutputs();
+  // Sin setEnablePin ni setPinsInverted: control manual del pin ENA
   stepperY.setCurrentPosition(posY);
 
   stepperZ.setMaxSpeed(MAX_SPEED_Z);
   stepperZ.setAcceleration(MAX_ACCEL_Z);
   stepperZ.setMinPulseWidth(MIN_PULSE_WIDTH_US);
-  stepperZ.setEnablePin(enablePinZ);
-  stepperZ.setPinsInverted(false, false, true);
-  stepperZ.enableOutputs();
+  // Sin setEnablePin ni setPinsInverted: control manual del pin ENA
   stepperZ.setCurrentPosition(posZ);
 
   // Configurar debounce
@@ -187,8 +187,10 @@ void loop() {
       emergencyStop = true;
       procesoActivo = false;
       procesoPausado = false;
-      digitalWrite(enablePinY, LOW);
-      digitalWrite(enablePinZ, LOW);
+      stepperY.stop();
+      stepperZ.stop();
+      digitalWrite(enablePinY, HIGH);  // HIGH = deshabilitado (detiene motores)
+      digitalWrite(enablePinZ, HIGH);
       Serial.println("PARO DE EMERGENCIA ACTIVADO");
     }
     return;
@@ -196,8 +198,8 @@ void loop() {
 
   if (emergencyStop) {
       emergencyStop = false;
-      digitalWrite(enablePinY, HIGH);
-      digitalWrite(enablePinZ, HIGH);
+      digitalWrite(enablePinY, LOW);   // LOW = habilitado (reactiva motores)
+      digitalWrite(enablePinZ, LOW);
       Serial.println("Paro de emergencia desactivado");
   }
 
@@ -680,14 +682,18 @@ void ejecutarHome() {
     return;
   }
   
+  // Habilitar motores antes de mover
+  digitalWrite(enablePinY, LOW);
+  digitalWrite(enablePinZ, LOW);
+
   long distanceZ = -200;
-  posZ = 0;  // Actualizar variable global
-  stepperZ.setCurrentPosition(0);  // Establecer posición en 0 antes de mover
+  posZ = 0;
+  stepperZ.setCurrentPosition(0);
   moverEjeZ(distanceZ);
   
   long distanceY = -800;
-  posY = 0;  // Actualizar variable global
-  stepperY.setCurrentPosition(0);  // Establecer posición en 0 antes de mover
+  posY = 0;
+  stepperY.setCurrentPosition(0);
   moverEjeY(distanceY);
   posY = 0;
   posZ = 0;

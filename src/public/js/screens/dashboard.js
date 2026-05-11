@@ -12,9 +12,6 @@ class DashboardScreen {
     }
 
     init() {
-        // No renderizar aquí porque el contenido ya fue cargado por loadDashboardContent
-        // Solo actualizar si es necesario
-        // this.renderDashboard();
     }
 
 

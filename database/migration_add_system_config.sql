@@ -27,3 +27,4 @@ ON DUPLICATE KEY UPDATE
 SELECT 'Migración de configuraciones completada' AS resultado;
 
 
+

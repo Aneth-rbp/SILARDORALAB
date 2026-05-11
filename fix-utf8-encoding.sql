@@ -39,3 +39,4 @@ FROM information_schema.TABLES
 WHERE TABLE_SCHEMA = 'silar_db';
 
 
+
