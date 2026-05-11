@@ -336,52 +336,52 @@ void parsearParametrosReceta(String json) {
   // Dipping waits
   idx = json.indexOf("\"dippingWait0\":");
   if (idx >= 0) {
-    int start = idx + 14;
+    int start = idx + 15;
     int end = json.indexOf(",", start);
     if (end < 0) end = json.indexOf("}", start);
     if (end > start) {
-      recipeParams.dippingWait0 = json.substring(start, end).toInt();
+       recipeParams.dippingWait0 = json.substring(start, end).toInt();
     }
   }
   
   idx = json.indexOf("\"dippingWait1\":");
   if (idx >= 0) {
-    int start = idx + 14;
+    int start = idx + 15;
     int end = json.indexOf(",", start);
     if (end < 0) end = json.indexOf("}", start);
     if (end > start) {
-      recipeParams.dippingWait1 = json.substring(start, end).toInt();
+       recipeParams.dippingWait1 = json.substring(start, end).toInt();
     }
   }
   
   idx = json.indexOf("\"dippingWait2\":");
   if (idx >= 0) {
-    int start = idx + 14;
+    int start = idx + 15;
     int end = json.indexOf(",", start);
     if (end < 0) end = json.indexOf("}", start);
     if (end > start) {
-      recipeParams.dippingWait2 = json.substring(start, end).toInt();
+       recipeParams.dippingWait2 = json.substring(start, end).toInt();
     }
   }
   
   idx = json.indexOf("\"dippingWait3\":");
   if (idx >= 0) {
-    int start = idx + 14;
+    int start = idx + 15;
     int end = json.indexOf(",", start);
     if (end < 0) end = json.indexOf("}", start);
     if (end > start) {
-      recipeParams.dippingWait3 = json.substring(start, end).toInt();
+       recipeParams.dippingWait3 = json.substring(start, end).toInt();
     }
   }
   
   // Transfer wait
   idx = json.indexOf("\"transferWait\":");
   if (idx >= 0) {
-    int start = idx + 14;
+    int start = idx + 15;
     int end = json.indexOf(",", start);
     if (end < 0) end = json.indexOf("}", start);
     if (end > start) {
-      recipeParams.transferWait = json.substring(start, end).toInt();
+       recipeParams.transferWait = json.substring(start, end).toInt();
     }
   }
   
@@ -405,7 +405,7 @@ void parsearParametrosReceta(String json) {
   // Dipping length
   idx = json.indexOf("\"dippingLength\":");
   if (idx >= 0) {
-    int start = idx + 15;
+    int start = idx + 16;
     int end = json.indexOf(",", start);
     if (end < 0) end = json.indexOf("}", start);
     if (end > start) {
