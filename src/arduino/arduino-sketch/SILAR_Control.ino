@@ -179,8 +179,8 @@ void loop() {
   limitMaxSwitchZ.loop();
   emergencySwitch.loop();
 
-  // Verificar paro de emergencia
-  bool emergenciaActiva = (emergencySwitch.getState() == LOW);
+  // Verificar paro de emergencia (HIGH = ACTIVADO / ABIERTO / DETENER)
+  bool emergenciaActiva = (emergencySwitch.getState() == HIGH);
 
   if (emergenciaActiva) {
     if (!emergencyStop) {
@@ -596,8 +596,35 @@ void moverEjeYAbsoluto(long posicionObjetivo) {
   moverEjeY(diferencia);
 }
 
+void verificarComandosDuranteMovimiento() {
+  if (Serial.available() > 0) {
+    String comando = Serial.readStringUntil('\n');
+    comando.trim();
+    
+    if (comando == "STOP") {
+      procesoActivo = false;
+      procesoPausado = false;
+      digitalWrite(lampPin, LOW);
+      digitalWrite(fanPin, LOW);
+      Serial.println("PROCESO_DETENIDO");
+    }
+    else if (comando == "PAUSE") {
+      if (procesoActivo && !procesoPausado) {
+        procesoPausado = true;
+        Serial.println("PROCESO_PAUSADO");
+      }
+    }
+    else if (comando == "RESUME") {
+      if (procesoActivo && procesoPausado) {
+        procesoPausado = false;
+        Serial.println("PROCESO_REANUDADO");
+      }
+    }
+  }
+}
+
 void moverEjeZVelocidad(long pasos, long velocidadMicrosegundos) {
-  if (emergencyStop) {
+  if (emergencyStop || (emergencySwitch.getState() == HIGH)) {
     Serial.println("Error: Paro de emergencia activo");
     return;
   }
@@ -631,6 +658,21 @@ void moverEjeZVelocidad(long pasos, long velocidadMicrosegundos) {
     limitMaxSwitchZ.loop();
     emergencySwitch.loop();
 
+    if (emergencySwitch.getState() == HIGH) {
+      emergencyStop = true;
+      procesoActivo = false;
+      procesoPausado = false;
+      stepperY.stop();
+      stepperZ.stop();
+      digitalWrite(enablePinY, HIGH);  // Deshabilitar motores al instante
+      digitalWrite(enablePinZ, HIGH);
+      Serial.println("PARO DE EMERGENCIA ACTIVADO");
+      break;
+    }
+
+    // 2. Escuchar comandos serie (STOP/PAUSE) durante el movimiento
+    verificarComandosDuranteMovimiento();
+
     if (emergencyStop || (procesoActivo && procesoPausado)) {
       Serial.println("Movimiento Z interrumpido");
       stepperZ.stop();
@@ -646,17 +688,18 @@ void moverEjeZVelocidad(long pasos, long velocidadMicrosegundos) {
       break;
     }
 
-    // Verificar límites (igual que código anterior: límite inicial = home = límite mínimo)
-    if (direccionPositiva && limitMaxSwitchZ.getState() == LOW) {
-      Serial.println("Limite Z Max alcanzado");
+    // 3. Verificar límites físicos según dirección (CORREGIDO)
+    // En dirección positiva (SUBIR, hacia Home en pin 14): verificar homeSwitchZ
+    if (direccionPositiva && homeSwitchZ.getState() == HIGH) {
+      Serial.println("Limite Z Max (Home) alcanzado");
       stepperZ.stop();
       posZ = stepperZ.currentPosition();
       stepperZ.setCurrentPosition(posZ);
       break;
     }
-    // En dirección negativa: verificar home (límite inicial) como límite mínimo (lsZi)
-    if (!direccionPositiva && homeSwitchZ.getState() == LOW) {
-      Serial.println("Limite Z Min alcanzado");
+    // En dirección negativa (BAJAR, hacia las soluciones en pin 15): verificar limitMaxSwitchZ
+    if (!direccionPositiva && limitMaxSwitchZ.getState() == HIGH) {
+      Serial.println("Limite Z Min (Solucion) alcanzado");
       stepperZ.stop();
       posZ = stepperZ.currentPosition();
       stepperZ.setCurrentPosition(posZ);
@@ -686,25 +729,65 @@ void ejecutarHome() {
   digitalWrite(enablePinY, LOW);
   digitalWrite(enablePinZ, LOW);
 
-  long distanceZ = -200;
+  // --- Home Z ---
+  // Mueve Z en la dirección del home (-) hasta que el switch se active
   posZ = 0;
   stepperZ.setCurrentPosition(0);
-  moverEjeZ(distanceZ);
-  
-  long distanceY = -800;
-  posY = 0;
-  stepperY.setCurrentPosition(0);
-  moverEjeY(distanceY);
-  posY = 0;
-  posZ = 0;
-  stepperY.setCurrentPosition(0);
+  stepperZ.setMaxSpeed(MAX_SPEED_Z * 0.5); // Velocidad reducida para home
+  stepperZ.setAcceleration(MAX_ACCEL_Z);
+  stepperZ.moveTo(-1000); // Distancia máxima de búsqueda
+  while (stepperZ.distanceToGo() != 0) {
+    emergencySwitch.loop();
+    homeSwitchZ.loop();
+    if (emergencySwitch.getState() == HIGH || homeSwitchZ.getState() == HIGH) {
+      stepperZ.stop();
+      break;
+    }
+    stepperZ.run();
+  }
+  // Back-off: retroceder para liberar el switch
   stepperZ.setCurrentPosition(0);
-  
+  stepperZ.moveTo(150); // Alejar del switch
+  while (stepperZ.distanceToGo() != 0) {
+    stepperZ.run();
+  }
+  posZ = 0;
+  stepperZ.setCurrentPosition(0);
+  stepperZ.setMaxSpeed(MAX_SPEED_Z);
+  Serial.println("Home Z completado");
+
+  // --- Home Y ---
+  // Mueve Y en la dirección del home (-) hasta que el switch se active
+  posY = 0;
+  stepperY.setCurrentPosition(0);
+  stepperY.setMaxSpeed(MAX_SPEED_Y * 0.5); // Velocidad reducida para home
+  stepperY.setAcceleration(MAX_ACCEL_Y);
+  stepperY.moveTo(-5000); // Distancia máxima de búsqueda
+  while (stepperY.distanceToGo() != 0) {
+    emergencySwitch.loop();
+    homeSwitchY.loop();
+    if (emergencySwitch.getState() == HIGH || homeSwitchY.getState() == HIGH) {
+      stepperY.stop();
+      break;
+    }
+    stepperY.run();
+  }
+  // Back-off: retroceder para liberar el switch
+  stepperY.setCurrentPosition(0);
+  stepperY.moveTo(150); // Alejar del switch
+  while (stepperY.distanceToGo() != 0) {
+    stepperY.run();
+  }
+  posY = 0;
+  stepperY.setCurrentPosition(0);
+  stepperY.setMaxSpeed(MAX_SPEED_Y);
+  Serial.println("Home Y completado");
+
   Serial.println("Secuencia HOME completada");
 }
 
 void moverEjeY(long pasos) {
-  if (emergencyStop) {
+  if (emergencyStop || (emergencySwitch.getState() == HIGH)) {
     Serial.println("Error: Paro de emergencia activo");
     return;
   }
@@ -727,26 +810,48 @@ void moverEjeY(long pasos) {
 
   stepperY.moveTo(objetivo);
 
+  bool procesoEnCurso = procesoActivo;
+
   while (stepperY.distanceToGo() != 0) {
     homeSwitchY.loop();
     limitMinSwitchY.loop();
     limitMaxSwitchY.loop();
     emergencySwitch.loop();
 
-    if (emergencyStop) {
-      Serial.println("Movimiento Y interrumpido: Paro de emergencia");
+    // 1. Verificar paro de emergencia físico instantáneamente
+    if (emergencySwitch.getState() == HIGH) {
+      emergencyStop = true;
+      procesoActivo = false;
+      procesoPausado = false;
+      stepperY.stop();
+      stepperZ.stop();
+      digitalWrite(enablePinY, HIGH);
+      digitalWrite(enablePinZ, HIGH);
+      Serial.println("PARO DE EMERGENCIA ACTIVADO");
+      break;
+    }
+
+    // 2. Escuchar comandos serie (STOP/PAUSE) durante el movimiento
+    verificarComandosDuranteMovimiento();
+
+    if (procesoEnCurso && !procesoActivo) {
+      Serial.println("Movimiento Y cancelado");
+      stepperY.stop();
+      break;
+    }
+    if (procesoActivo && procesoPausado) {
+      Serial.println("Movimiento Y pausado");
       stepperY.stop();
       break;
     }
 
-    // Verificar límites (igual que código anterior: límite inicial = home = límite mínimo)
-    if (direccionPositiva && limitMaxSwitchY.getState() == LOW) {
+    // 3. Verificar límites físicos según dirección
+    if (direccionPositiva && limitMaxSwitchY.getState() == HIGH) {
       Serial.println("Limite Y Max alcanzado");
       stepperY.stop();
       break;
     }
-    // En dirección negativa: verificar home (límite inicial) 
-    if (!direccionPositiva && homeSwitchY.getState() == LOW) {
+    if (!direccionPositiva && homeSwitchY.getState() == HIGH) {
       Serial.println("Limite Y Min alcanzado");
       stepperY.stop();
       break;
@@ -763,7 +868,7 @@ void moverEjeY(long pasos) {
 }
 
 void moverEjeZ(long pasos) {
-  if (emergencyStop) {
+  if (emergencyStop || (emergencySwitch.getState() == HIGH)) {
     Serial.println("Error: Paro de emergencia activo");
     return;
   }
@@ -786,27 +891,51 @@ void moverEjeZ(long pasos) {
 
   stepperZ.moveTo(objetivo);
 
+  bool procesoEnCurso = procesoActivo;
+
   while (stepperZ.distanceToGo() != 0) {
     homeSwitchZ.loop();
     limitMinSwitchZ.loop();
     limitMaxSwitchZ.loop();
     emergencySwitch.loop();
 
-    if (emergencyStop) {
-      Serial.println("Movimiento Z interrumpido: Paro de emergencia");
+    // 1. Verificar paro de emergencia físico instantáneamente
+    if (emergencySwitch.getState() == HIGH) {
+      emergencyStop = true;
+      procesoActivo = false;
+      procesoPausado = false;
+      stepperY.stop();
+      stepperZ.stop();
+      digitalWrite(enablePinY, HIGH);
+      digitalWrite(enablePinZ, HIGH);
+      Serial.println("PARO DE EMERGENCIA ACTIVADO");
+      break;
+    }
+
+    // 2. Escuchar comandos serie (STOP/PAUSE) durante el movimiento
+    verificarComandosDuranteMovimiento();
+
+    if (procesoEnCurso && !procesoActivo) {
+      Serial.println("Movimiento Z cancelado");
+      stepperZ.stop();
+      break;
+    }
+    if (procesoActivo && procesoPausado) {
+      Serial.println("Movimiento Z pausado");
       stepperZ.stop();
       break;
     }
 
-    // Verificar límites (igual que código anterior: límite inicial = home = límite mínimo)
-    if (direccionPositiva && limitMaxSwitchZ.getState() == LOW) {
-      Serial.println("Limite Z Max alcanzado");
+    // 3. Verificar límites físicos (CORREGIDO: igual que moverEjeZVelocidad)
+    // Subir (positivo) → para en Home (switch de arriba, pin 14)
+    if (direccionPositiva && homeSwitchZ.getState() == HIGH) {
+      Serial.println("Limite Z Max (Home) alcanzado");
       stepperZ.stop();
       break;
     }
-    // En dirección negativa: verificar home (límite inicial)
-    if (!direccionPositiva && homeSwitchZ.getState() == LOW) {
-      Serial.println("Limite Z Min alcanzado");
+    // Bajar (negativo) → para en limite inferior (pin 15)
+    if (!direccionPositiva && limitMaxSwitchZ.getState() == HIGH) {
+      Serial.println("Limite Z Min (Solucion) alcanzado");
       stepperZ.stop();
       break;
     }
@@ -840,17 +969,17 @@ void enviarStatus() {
   Serial.print(",Z=");
   Serial.print(posZ);
   Serial.print(",HomeY=");
-  Serial.print(digitalRead(homePinY) == LOW ? "1" : "0");
+  Serial.print(digitalRead(homePinY) == HIGH ? "1" : "0");
   Serial.print(",HomeZ=");
-  Serial.print(digitalRead(homePinZ) == LOW ? "1" : "0");
+  Serial.print(digitalRead(homePinZ) == HIGH ? "1" : "0");
   Serial.print(",LimitMinY=");
-  Serial.print(digitalRead(limitMinY) == LOW ? "1" : "0");
+  Serial.print(digitalRead(limitMinY) == HIGH ? "1" : "0");
   Serial.print(",LimitMaxY=");
-  Serial.print(digitalRead(limitMaxY) == LOW ? "1" : "0");
+  Serial.print(digitalRead(limitMaxY) == HIGH ? "1" : "0");
   Serial.print(",LimitMinZ=");
-  Serial.print(digitalRead(limitMinZ) == LOW ? "1" : "0");
+  Serial.print(digitalRead(limitMinZ) == HIGH ? "1" : "0");
   Serial.print(",LimitMaxZ=");
-  Serial.print(digitalRead(limitMaxZ) == LOW ? "1" : "0");
+  Serial.print(digitalRead(limitMaxZ) == HIGH ? "1" : "0");
   Serial.print(",Lamp=");
   Serial.print(digitalRead(lampPin) == HIGH ? "1" : "0");
   Serial.print(",Fan=");

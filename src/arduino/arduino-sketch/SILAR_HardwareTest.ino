@@ -1,67 +1,66 @@
+#include <AccelStepper.h>
 #include <ezButton.h>
 
 /*
- * Prueba de Hardware SILAR - Eje Y
+ * Prueba de Hardware SILAR - Eje Y (Versión Profesional con AccelStepper)
  *
- * Este sketch genera pulsos directos sobre el driver del motor Y
- * para validar cableado, señales STEP/DIR/ENA y finales de carrera.
- * Incluye logs detallados que permiten ver en el monitor serie cada
- * transición de hardware.
+ * Este sketch utiliza la librería AccelStepper (igual que el código real)
+ * para asegurar rampas de aceleración y evitar que el motor se trabe por arranques bruscos.
+ * Permite cambiar la polaridad del ENABLE por comando para depurar fallas de cableado.
  *
  * Hardware: Arduino Mega 2560 Rev3
  */
 
 // Pines principales del eje Y - Según diagrama MOC-ELEC-001
-// ENA: LOW = habilitado, HIGH = deshabilitado (activo-LOW)
 const int stepPinY = 2;      // PUL+ (D2)
 const int dirPinY = 3;       // DIR+ (D3)
-const int enablePinY = 4;    // ENA+ (D4) - LOW=habilitado, HIGH=deshabilitado
+const int enablePinY = 4;    // ENA+ (D4)
 const int homePinY = 17;     // lsYi - Home/Límite mínimo Y (D17)
-const int limitMinY = 17;    // lsYi - mismo que homePinY
+const int limitMinY = 17;    // lsYi
 const int limitMaxY = 16;    // lsYf - Límite máximo Y (D16)
 
-// Configuración de prueba
-const unsigned int STEP_PULSE_US = 800;   // Duración de cada flanco HIGH/LOW
-const unsigned int PAUSA_CAMBIO_DIR_MS = 500;
-const unsigned int PAUSA_ENTRE_BLOQUES_MS = 1000;
-const long PASOS_POR_BLOQUE = 800;
+// Instancia de AccelStepper
+AccelStepper stepperY(AccelStepper::DRIVER, stepPinY, dirPinY);
 
 // Entradas con antiprebote
 ezButton homeSwitchY(homePinY);
 ezButton limitMinSwitchY(limitMinY);
 ezButton limitMaxSwitchY(limitMaxY);
 
-// Prototipos
+// Variables de configuración de depuración
+bool enaActiveLevel = LOW;  // Por defecto LOW = Habilitado (Activo-LOW)
+long pasosDePrueba = 1000;  // Cantidad de pasos a mover en pruebas FWD/REV
+float velocidadMax = 800.0; // Velocidad máxima para la prueba (pasos/seg)
+float aceleracion = 500.0;  // Aceleración (pasos/seg^2)
+
 void imprimirEncabezado();
-void imprimirEstadoHardware(const char* origen);
-void generarPasos(bool sentidoPositivo, long cantidadPasos);
-bool verificarLimites(bool sentidoPositivo);
+void imprimirEstado();
+void moverEje(long pasos);
 void actualizarEntradas();
 String leerComando();
 
 void setup() {
   Serial.begin(9600);
 
-  pinMode(stepPinY, OUTPUT);
-  pinMode(dirPinY, OUTPUT);
   pinMode(enablePinY, OUTPUT);
-
   pinMode(homePinY, INPUT_PULLUP);
   pinMode(limitMinY, INPUT_PULLUP);
   pinMode(limitMaxY, INPUT_PULLUP);
 
-  // Configurar debounce
-  homeSwitchY.setDebounceTime(40);
-  limitMinSwitchY.setDebounceTime(40);
-  limitMaxSwitchY.setDebounceTime(40);
+  // Configurar debounce de finales de carrera
+  homeSwitchY.setDebounceTime(50);
+  limitMinSwitchY.setDebounceTime(50);
+  limitMaxSwitchY.setDebounceTime(50);
 
-  // Habilitar driver: LOW = habilitado para este driver (activo-LOW)
-  digitalWrite(enablePinY, LOW);
-  digitalWrite(dirPinY, LOW);
-  digitalWrite(stepPinY, LOW);
+  // Inicializar AccelStepper
+  stepperY.setMaxSpeed(velocidadMax);
+  stepperY.setAcceleration(aceleracion);
+  
+  // Habilitar driver inicialmente según el nivel configurado
+  digitalWrite(enablePinY, enaActiveLevel); 
 
   imprimirEncabezado();
-  imprimirEstadoHardware("SETUP");
+  imprimirEstado();
 }
 
 void loop() {
@@ -71,30 +70,54 @@ void loop() {
     String comando = leerComando();
 
     if (comando == "FWD") {
-      Serial.println("CMD:FWD -> Iniciando bloque en sentido positivo");
-      generarPasos(true, PASOS_POR_BLOQUE);
-      Serial.println("CMD:FWD -> Bloque finalizado");
-    } else if (comando == "REV") {
-      Serial.println("CMD:REV -> Iniciando bloque en sentido negativo");
-      generarPasos(false, PASOS_POR_BLOQUE);
-      Serial.println("CMD:REV -> Bloque finalizado");
-    } else if (comando == "AUTO") {
-      Serial.println("CMD:AUTO -> Ejecutando bloque FWD y REV");
-      generarPasos(true, PASOS_POR_BLOQUE);
-      delay(PAUSA_ENTRE_BLOQUES_MS);
-      generarPasos(false, PASOS_POR_BLOQUE);
-      Serial.println("CMD:AUTO -> Secuencia completada");
-    } else if (comando == "DISABLE") {
-      digitalWrite(enablePinY, HIGH);  // HIGH = deshabilitado
-      Serial.println("CMD:DISABLE -> Driver deshabilitado (ENA=HIGH)");
-      imprimirEstadoHardware("DISABLE");
-    } else if (comando == "ENABLE") {
-      digitalWrite(enablePinY, LOW);   // LOW = habilitado
-      Serial.println("CMD:ENABLE -> Driver habilitado (ENA=LOW)");
-      imprimirEstadoHardware("ENABLE");
-    } else if (comando == "STATUS") {
-      imprimirEstadoHardware("STATUS");
-    } else {
+      Serial.print("CMD:FWD -> Moviendo +");
+      Serial.print(pasosDePrueba);
+      Serial.println(" pasos con aceleracion...");
+      moverEje(pasosDePrueba);
+    } 
+    else if (comando == "REV") {
+      Serial.print("CMD:REV -> Moviendo -");
+      Serial.print(pasosDePrueba);
+      Serial.println(" pasos con aceleracion...");
+      moverEje(-pasosDePrueba);
+    } 
+    else if (comando == "SET_LOW") {
+      enaActiveLevel = LOW;
+      digitalWrite(enablePinY, enaActiveLevel);
+      Serial.println("CMD:SET_LOW -> Nivel activo ENA configurado en LOW (Estándar)");
+      imprimirEstado();
+    } 
+    else if (comando == "SET_HIGH") {
+      enaActiveLevel = HIGH;
+      digitalWrite(enablePinY, enaActiveLevel);
+      Serial.println("CMD:SET_HIGH -> Nivel activo ENA configurado en HIGH");
+      imprimirEstado();
+    } 
+    else if (comando == "DISABLE") {
+      // Deshabilitar es lo opuesto al nivel activo
+      digitalWrite(enablePinY, !enaActiveLevel);
+      Serial.println("CMD:DISABLE -> Driver deshabilitado temporalmente");
+      imprimirEstado();
+    } 
+    else if (comando == "ENABLE") {
+      // Habilitar es poner el nivel activo
+      digitalWrite(enablePinY, enaActiveLevel);
+      Serial.println("CMD:ENABLE -> Driver habilitado");
+      imprimirEstado();
+    } 
+    else if (comando == "STATUS") {
+      imprimirEstado();
+    } 
+    else if (comando.startsWith("SPEED:")) {
+      float nuevaVel = comando.substring(6).toFloat();
+      if (nuevaVel > 10 && nuevaVel <= 2000) {
+        velocidadMax = nuevaVel;
+        stepperY.setMaxSpeed(velocidadMax);
+        Serial.print("CMD:SPEED -> Nueva velocidad maxima: ");
+        Serial.println(velocidadMax);
+      }
+    }
+    else {
       Serial.print("CMD:ERROR -> Comando desconocido: ");
       Serial.println(comando);
     }
@@ -102,83 +125,61 @@ void loop() {
 }
 
 void imprimirEncabezado() {
-  Serial.println("===============================");
-  Serial.println("  SILAR - PRUEBA DE HARDWARE");
+  Serial.println("=================================================");
+  Serial.println("  SILAR - TEST DE HARDWARE MEJORADO (CON ACCEL)");
+  Serial.println("=================================================");
   Serial.println("  COMANDOS:");
-  Serial.println("    FWD      -> Bloque de pasos en sentido +");
-  Serial.println("    REV      -> Bloque de pasos en sentido -");
-  Serial.println("    AUTO     -> FWD seguido de REV");
-  Serial.println("    ENABLE   -> Habilitar driver");
-  Serial.println("    DISABLE  -> Deshabilitar driver");
-  Serial.println("    STATUS   -> Leer estado actual");
-  Serial.println("===============================\n");
+  Serial.println("    FWD      -> Mover adelante (con rampa suave)");
+  Serial.println("    REV      -> Mover atras (con rampa suave)");
+  Serial.println("    SET_LOW  -> Cambiar ENA activo a LOW (Estándar)");
+  Serial.println("    SET_HIGH -> Cambiar ENA activo a HIGH");
+  Serial.println("    ENABLE   -> Activar driver");
+  Serial.println("    DISABLE  -> Desactivar driver");
+  Serial.println("    STATUS   -> Ver sensores y estado del driver");
+  Serial.println("    SPEED:X  -> Cambiar velocidad (ej: SPEED:500)");
+  Serial.println("=================================================\n");
 }
 
-void imprimirEstadoHardware(const char* origen) {
-  Serial.print("HW:");
-  Serial.print(origen);
-  Serial.print(" | ENA=");
-  Serial.print(digitalRead(enablePinY) == HIGH ? "HIGH" : "LOW");
-  Serial.print(" DIR=");
-  Serial.print(digitalRead(dirPinY) == HIGH ? "HIGH" : "LOW");
-  Serial.print(" STEP=");
-  Serial.print(digitalRead(stepPinY) == HIGH ? "HIGH" : "LOW");
+void imprimirEstado() {
+  Serial.print("ESTADO | Pin ENA(4)=");
+  Serial.print(digitalRead(enablePinY) == HIGH ? "HIGH(5V)" : "LOW(0V)");
+  Serial.print(" | Config ENA Activo=");
+  Serial.print(enaActiveLevel == HIGH ? "HIGH" : "LOW");
   Serial.print(" | LS_HOME=");
-  Serial.print(homeSwitchY.getState() == LOW ? "ACTIVO" : "LIBRE");
-  Serial.print(" LS_MIN=");
-  Serial.print(limitMinSwitchY.getState() == LOW ? "ACTIVO" : "LIBRE");
+  Serial.print(homeSwitchY.getState() == HIGH ? "ACTIVO" : "LIBRE");
   Serial.print(" LS_MAX=");
-  Serial.println(limitMaxSwitchY.getState() == LOW ? "ACTIVO" : "LIBRE");
+  Serial.println(limitMaxSwitchY.getState() == HIGH ? "ACTIVO" : "LIBRE");
 }
 
-void generarPasos(bool sentidoPositivo, long cantidadPasos) {
-  // LOW = habilitado. Si está HIGH (deshabilitado), lo habilitamos.
-  if (digitalRead(enablePinY) == HIGH) {
-    Serial.println("WARN -> Driver deshabilitado, habilitando automaticamente");
-    digitalWrite(enablePinY, LOW);
-    delay(10);
-  }
+void moverEje(long pasos) {
+  // Aseguramos que esté habilitado el driver antes de mover
+  digitalWrite(enablePinY, enaActiveLevel);
+  delay(10); // pequeña pausa para estabilizar driver
+  
+  stepperY.move(pasos);
 
-  digitalWrite(dirPinY, sentidoPositivo ? HIGH : LOW);
-  imprimirEstadoHardware(sentidoPositivo ? "DIR=POS" : "DIR=NEG");
-  delay(PAUSA_CAMBIO_DIR_MS);
+  while (stepperY.distanceToGo() != 0) {
+    actualizarEntradas();
 
-  Serial.print("PASOS -> Sentido ");
-  Serial.print(sentidoPositivo ? "+" : "-");
-  Serial.print(" | Cantidad=");
-  Serial.println(cantidadPasos);
-
-  for (long i = 0; i < cantidadPasos; i++) {
-    if (verificarLimites(sentidoPositivo)) {
-      Serial.print("STOP -> Limite ");
-      Serial.println(sentidoPositivo ? "MAX activado" : "MIN o HOME activado");
+    // Validar límites según dirección del movimiento
+    if (pasos > 0 && limitMaxSwitchY.getState() == HIGH) {
+      Serial.println("STOP -> Limite MAX activado físicamente. Deteniendo!");
+      stepperY.stop();
+      break;
+    }
+    if (pasos < 0 && homeSwitchY.getState() == HIGH) {
+      Serial.println("STOP -> Limite MIN/HOME activado físicamente. Deteniendo!");
+      stepperY.stop();
       break;
     }
 
-    digitalWrite(stepPinY, HIGH);
-    delayMicroseconds(STEP_PULSE_US);
-    digitalWrite(stepPinY, LOW);
-    delayMicroseconds(STEP_PULSE_US);
-
-    if ((i + 1) % 100 == 0) {
-      Serial.print("PROGRESO -> Pasos ejecutados: ");
-      Serial.println(i + 1);
-      imprimirEstadoHardware("PROG");
-    }
+    stepperY.run();
   }
 
-  imprimirEstadoHardware("BLOQUE_FIN");
-}
-
-bool verificarLimites(bool sentidoPositivo) {
-  actualizarEntradas();
-
-  if (sentidoPositivo) {
-    return limitMaxSwitchY.getState() == LOW;
-  }
-
-  // Sentido negativo: se detiene con home o límite mínimo
-  return (homeSwitchY.getState() == LOW) || (limitMinSwitchY.getState() == LOW);
+  // Sincronizar posición actual de la librería
+  stepperY.setCurrentPosition(stepperY.currentPosition());
+  Serial.println("MOVIMIENTO FINALIZADO");
+  imprimirEstado();
 }
 
 void actualizarEntradas() {
@@ -193,4 +194,3 @@ String leerComando() {
   comando.toUpperCase();
   return comando;
 }
-

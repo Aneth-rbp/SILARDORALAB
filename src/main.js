@@ -63,17 +63,8 @@ function createWindow() {
     }
   });
 
-  // Iniciar servidor primero, luego cargar la aplicación
-  if (isDev) {
-    startServerAndLoad();
-  } else {
-    // En producción, cargar desde archivos locales
-    mainWindow.loadFile(path.join(__dirname, 'public', 'index.html'));
-    mainWindow.once('ready-to-show', () => {
-      mainWindow.show();
-      startServer();
-    });
-  }
+  // Iniciar servidor primero, luego cargar la aplicación (tanto en desarrollo como producción)
+  startServerAndLoad();
 }
 
 function startServerAndLoad() {
@@ -116,15 +107,13 @@ function waitForServer(callback, attempts = 0) {
 function loadApplication() {
   if (!mainWindow) return;
   
+  // Cargar siempre desde el servidor local de Node.js (localhost:3000)
+  // Esto asegura que las llamadas API relativas (/api) y WebSockets conecten de forma nativa
+  mainWindow.loadURL('http://localhost:3000');
+  
   if (isDev) {
-    // En desarrollo, cargar desde el servidor web
-    mainWindow.loadURL('http://localhost:3000');
-    
-    // Abrir las herramientas de desarrollador
+    // Abrir las herramientas de desarrollador en modo desarrollo
     mainWindow.webContents.openDevTools();
-  } else {
-    // En producción, cargar desde archivos locales
-    mainWindow.loadFile(path.join(__dirname, 'public', 'index.html'));
   }
 
   // Mostrar la ventana cuando esté lista
