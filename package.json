@@ -1,6 +1,6 @@
 {
   "name": "silar-system",
-  "version": "2.0.0",
+  "version": "2.1.3",
   "description": "Sistema de control SILAR para laboratorio local",
   "main": "src/main.js",
   "scripts": {
@@ -51,16 +51,7 @@
       "server.js",
       "config/**/*",
       "node_modules/**/*",
-      "!node_modules/@serialport/bindings-cpp/**/*",
-      "!node_modules/@serialport/bindings-cpp",
-      "!**/node_modules/@serialport/bindings-cpp/**/*"
-    ],
-    "extraFiles": [
-      {
-        "from": "node_modules/@serialport/bindings-cpp",
-        "to": "node_modules/@serialport/bindings-cpp",
-        "filter": ["**/*"]
-      }
+      "setup-database.bat"
     ],
     "win": {
       "target": "nsis",
@@ -75,10 +66,6 @@
       "createStartMenuShortcut": true,
       "artifactName": "SILAR-System-Setup-${version}.exe"
     },
-    "asar": false,
-    "asarUnpack": [
-      "**/node_modules/@serialport/**/*",
-      "**/node_modules/serialport/**/*"
-    ]
+    "asar": false
   }
 }

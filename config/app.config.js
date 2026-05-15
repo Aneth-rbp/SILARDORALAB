@@ -4,18 +4,19 @@
  */
 
 const path = require('path');
+const pkg = require('../package.json');
 
 module.exports = {
   // Configuración de la aplicación
   app: {
-    name: 'SILAR System',
-    version: '2.0.0',
-    description: 'Sistema de control SILAR para laboratorio local',
-    author: 'DORA Lab',
-    port: process.env.PORT || 3000,
+    name: pkg.build?.productName || pkg.name || 'SILAR System',
+    version: pkg.version || '2.1.1',
+    description: pkg.description || 'Sistema de control SILAR para laboratorio local',
+    author: pkg.author || 'DORA Lab',
+    port: process.env.PORT || 3001,
     host: process.env.HOST || '0.0.0.0',
     environment: process.env.NODE_ENV || 'development',
-    baseUrl: process.env.BASE_URL || 'http://localhost:3000'
+    baseUrl: process.env.BASE_URL || 'http://localhost:3001'
   },
 
   // Configuración de la base de datos
@@ -55,18 +56,18 @@ module.exports = {
   paths: {
     public: path.join(__dirname, '..', 'src', 'public'),
     database: path.join(__dirname, '..', 'database'),
-    logs: path.join(__dirname, '..', 'logs'),
-    uploads: path.join(__dirname, '..', 'uploads'),
-    backups: path.join(__dirname, '..', 'backups')
+    logs: process.env.USER_DATA_PATH ? path.join(process.env.USER_DATA_PATH, 'logs') : path.join(__dirname, '..', 'logs'),
+    uploads: process.env.USER_DATA_PATH ? path.join(process.env.USER_DATA_PATH, 'uploads') : path.join(__dirname, '..', 'uploads'),
+    backups: process.env.USER_DATA_PATH ? path.join(process.env.USER_DATA_PATH, 'backups') : path.join(__dirname, '..', 'backups')
   },
 
   // Configuración de logging
   logging: {
-    level: process.env.LOG_LEVEL || 'error',
+    level: process.env.LOG_LEVEL || 'info',
     file: 'silar-system.log',
     maxSize: '10m',
     maxFiles: 5,
-    console: false
+    console: true
   },
 
   // Configuración de procesos

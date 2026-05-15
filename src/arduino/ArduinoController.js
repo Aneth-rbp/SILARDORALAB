@@ -21,7 +21,7 @@ class ArduinoController extends EventEmitter {
         this.reconnectTimer = null;
         this.commandQueue = [];
         this.processingCommand = false;
-        
+
         // Estado actual del Arduino
         this.currentState = {
             mode: 'UNKNOWN', // MANUAL, AUTOMATIC, HOME
@@ -71,12 +71,12 @@ class ArduinoController extends EventEmitter {
     async detectArduinoPort() {
         try {
             const ports = await SerialPort.list();
-            
+
             logger.info(`Escaneando ${ports.length} puerto(s) disponible(s)...`);
             ports.forEach(port => {
                 logger.debug(`Puerto encontrado: ${port.path} - Vendor: ${port.vendorId || 'N/A'}, Product: ${port.productId || 'N/A'}, Manufacturer: ${port.manufacturer || 'N/A'}, Friendly: ${port.friendlyName || 'N/A'}`);
             });
-            
+
             // Buscar Arduino por fabricante o identificadores conocidos
             const arduinoPort = ports.find(port => {
                 const manufacturer = (port.manufacturer || '').toLowerCase();
@@ -105,23 +105,23 @@ class ArduinoController extends EventEmitter {
                     '6001'  // FT232
                 ]);
 
-                return manufacturer.includes('arduino') || 
-                       manufacturer.includes('ch340') || 
-                       manufacturer.includes('ftdi') ||
-                       manufacturer.includes('silicon labs') ||
-                       friendlyName.includes('arduino') ||
-                       friendlyName.includes('mega') ||
-                       friendlyName.includes('uno') ||
-                       friendlyName.includes('nano') ||
-                       knownVendors.has(vendorId) ||
-                       knownProducts.has(productId);
+                return manufacturer.includes('arduino') ||
+                    manufacturer.includes('ch340') ||
+                    manufacturer.includes('ftdi') ||
+                    manufacturer.includes('silicon labs') ||
+                    friendlyName.includes('arduino') ||
+                    friendlyName.includes('mega') ||
+                    friendlyName.includes('uno') ||
+                    friendlyName.includes('nano') ||
+                    knownVendors.has(vendorId) ||
+                    knownProducts.has(productId);
             });
 
             if (arduinoPort) {
-                const detectedModel = arduinoPort.friendlyName || 
-                                     (arduinoPort.productId === '0042' ? 'Mega 2560 Rev3' : 
-                                      arduinoPort.productId === '0010' ? 'Mega 2560' :
-                                      arduinoPort.productId === '0043' ? 'Uno' : 'Arduino');
+                const detectedModel = arduinoPort.friendlyName ||
+                    (arduinoPort.productId === '0042' ? 'Mega 2560 Rev3' :
+                        arduinoPort.productId === '0010' ? 'Mega 2560' :
+                            arduinoPort.productId === '0043' ? 'Uno' : 'Arduino');
                 logger.info(`Arduino ${detectedModel} detectado en puerto: ${arduinoPort.path} (VID: ${arduinoPort.vendorId || 'N/A'}, PID: ${arduinoPort.productId || 'N/A'})`);
                 return arduinoPort.path;
             }
@@ -174,7 +174,7 @@ class ArduinoController extends EventEmitter {
             });
 
             // Configurar parser de líneas con codificación UTF-8
-            this.parser = this.port.pipe(new ReadlineParser({ 
+            this.parser = this.port.pipe(new ReadlineParser({
                 delimiter: '\n',
                 encoding: 'utf8'
             }));
@@ -237,7 +237,7 @@ class ArduinoController extends EventEmitter {
             logger.warn('Puerto serial cerrado');
             this.isConnected = false;
             this.emit('disconnected');
-            
+
             // Intentar reconectar automáticamente
             this.attemptReconnect();
         });
@@ -259,11 +259,11 @@ class ArduinoController extends EventEmitter {
         try {
             // Parsear la respuesta usando el parser
             const parsed = ResponseParser.parse(data);
-            
+
             if (parsed) {
                 // Actualizar estado interno
                 this.updateState(parsed);
-                
+
                 // Emitir evento con los datos parseados
                 this.emit('data', parsed);
             }
@@ -351,7 +351,7 @@ class ArduinoController extends EventEmitter {
             // Actualizar estado completo desde STATUS
             this.currentState.mode = parsed.mode || this.currentState.mode;
             this.currentState.emergencyStop = parsed.emergencyStop !== undefined ? parsed.emergencyStop : this.currentState.emergencyStop;
-            
+
             if (parsed.positionY !== undefined) {
                 this.currentState.axisY.position = parsed.positionY;
             }
@@ -432,7 +432,7 @@ class ArduinoController extends EventEmitter {
     /**
      * Comandos específicos del sistema SILAR
      */
-    
+
     async setModeManual() {
         logger.info('Configurando modo MANUAL');
         return await this.sendCommand(ARDUINO_COMMANDS.MODE_MANUAL);
@@ -447,7 +447,7 @@ class ArduinoController extends EventEmitter {
         if (this.currentState.emergencyStop) {
             throw new Error('No se puede ejecutar HOME: Paro de emergencia activo');
         }
-        
+
         logger.info('Ejecutando HOME');
         this.currentState.axisY.moving = true;
         this.currentState.axisZ.moving = true;
@@ -471,7 +471,7 @@ class ArduinoController extends EventEmitter {
         if (this.currentState.axisY.atLimit && ((steps > 0 && this.currentState.axisY.limitMax) || (steps < 0 && this.currentState.axisY.limitMin))) {
             throw new Error('No se puede mover: Límite alcanzado');
         }
-        
+
         logger.info(`Moviendo eje Y: ${steps} pasos`);
         this.currentState.axisY.moving = true;
         try {
@@ -493,7 +493,7 @@ class ArduinoController extends EventEmitter {
         if (this.currentState.axisZ.atLimit && ((steps > 0 && this.currentState.axisZ.limitMax) || (steps < 0 && this.currentState.axisZ.limitMin))) {
             throw new Error('No se puede mover: Límite alcanzado');
         }
-        
+
         logger.info(`Moviendo eje Z: ${steps} pasos`);
         this.currentState.axisZ.moving = true;
         try {
@@ -517,26 +517,34 @@ class ArduinoController extends EventEmitter {
         if (!this.isConnected) {
             throw new Error('Arduino no conectado');
         }
-        
+
         // Construir comando START_RECIPE con parámetros JSON
+        const numDippingLen = Number(parameters.dippingLength);
+        const numTransSpeed = Number(parameters.transferSpeed);
+        const numDipSpeed = Number(parameters.dipSpeed);
+
+        const dippingLen = (numDippingLen && numDippingLen > 100) ? numDippingLen : 10000;
+        const transSpeed = (numTransSpeed && numTransSpeed > 100) ? numTransSpeed : 1000;
+        const dippingSpeed = (numDipSpeed && numDipSpeed > 100) ? numDipSpeed : 1000;
+
         const jsonParams = JSON.stringify({
-            cycles: parameters.cycles || 1,
-            dippingWait0: parameters.dippingWait0 || 5000,
-            dippingWait1: parameters.dippingWait1 || 5000,
-            dippingWait2: parameters.dippingWait2 || 5000,
-            dippingWait3: parameters.dippingWait3 || 5000,
-            transferWait: parameters.transferWait || 2000,
+            cycles: Number(parameters.cycles) || 1,
+            dippingWait0: Number(parameters.dippingWait0) || 5000,
+            dippingWait1: Number(parameters.dippingWait1) || 5000,
+            dippingWait2: Number(parameters.dippingWait2) || 5000,
+            dippingWait3: Number(parameters.dippingWait3) || 5000,
+            transferWait: Number(parameters.transferWait) || 2000,
             exceptDripping1: parameters.exceptDripping1 || false,
             exceptDripping2: parameters.exceptDripping2 || false,
             exceptDripping3: parameters.exceptDripping3 || false,
             exceptDripping4: parameters.exceptDripping4 || false,
-            dipStartPosition: parameters.dipStartPosition || 0,
-            dippingLength: parameters.dippingLength || 10000,
-            transferSpeed: parameters.transferSpeed || 1000,
-            dipSpeed: parameters.dipSpeed || 1000,
+            dipStartPosition: Number(parameters.dipStartPosition) || 0,
+            dippingLength: dippingLen,
+            transferSpeed: transSpeed,
+            dipSpeed: dippingSpeed,
             fan: parameters.fan || false
         });
-        
+
         const command = `START_RECIPE:${jsonParams}`;
         logger.info('Iniciando proceso automático en Arduino', { parameters });
         return await this.sendCommand(command, false, 10000);

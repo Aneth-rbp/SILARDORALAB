@@ -36,9 +36,9 @@ class SilarWebServer {
     const token = authHeader && authHeader.split(' ')[1]; // Bearer TOKEN
 
     if (!token) {
-      return res.status(401).json({ 
-        success: false, 
-        message: 'Token de acceso requerido' 
+      return res.status(401).json({
+        success: false,
+        message: 'Token de acceso requerido'
       });
     }
 
@@ -46,7 +46,9 @@ class SilarWebServer {
       // Decodificar token simple (en producción usar JWT)
       const decoded = Buffer.from(token, 'base64').toString('ascii');
       const [userId, timestamp] = decoded.split(':');
-      
+
+
+
       // Obtener información completa del usuario
       const [rows] = await this.dbConnection.execute(
         'SELECT id, username, full_name, role FROM users WHERE id = ? AND is_active = 1',
@@ -54,9 +56,9 @@ class SilarWebServer {
       );
 
       if (rows.length === 0) {
-        return res.status(403).json({ 
-          success: false, 
-          message: 'Usuario no válido' 
+        return res.status(403).json({
+          success: false,
+          message: 'Usuario no válido'
         });
       }
 
@@ -65,9 +67,9 @@ class SilarWebServer {
       next();
     } catch (error) {
       logger.apiError(req.method, req.url, error, null);
-      return res.status(403).json({ 
-        success: false, 
-        message: 'Token inválido' 
+      return res.status(403).json({
+        success: false,
+        message: 'Token inválido'
       });
     }
   }
@@ -75,7 +77,7 @@ class SilarWebServer {
   setupExpress() {
     const app = express();
     this.server = http.createServer(app);
-    
+
     // Configurar Socket.IO con CORS
     this.io = socketIo(this.server, config.socket);
 
@@ -83,14 +85,14 @@ class SilarWebServer {
     app.use((req, res, next) => {
       // Interceptar res.json para asegurar charset UTF-8
       const originalJson = res.json.bind(res);
-      res.json = function(data) {
+      res.json = function (data) {
         // Solo establecer charset si no se ha establecido otro Content-Type
         if (!res.get('Content-Type') || res.get('Content-Type').includes('application/json')) {
           res.setHeader('Content-Type', 'application/json; charset=utf-8');
         }
         return originalJson(data);
       };
-      
+
       next();
     });
 
@@ -99,7 +101,7 @@ class SilarWebServer {
       res.header('Access-Control-Allow-Origin', '*');
       res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
       res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, Authorization');
-      
+
       if (req.method === 'OPTIONS') {
         res.sendStatus(200);
       } else {
@@ -111,7 +113,7 @@ class SilarWebServer {
     // Express maneja UTF-8 por defecto, pero lo aseguramos con el middleware
     app.use(express.json());
     app.use(express.urlencoded({ extended: true }));
-    
+
     // Servir archivos estáticos desde la carpeta public con charset UTF-8
     app.use(express.static(path.join(__dirname, 'src', 'public'), {
       setHeaders: (res, filePath) => {
@@ -127,7 +129,7 @@ class SilarWebServer {
         }
       }
     }));
-    
+
     // Servir Socket.IO client
     app.get('/socket.io/socket.io.js', (req, res) => {
       res.sendFile(path.join(__dirname, 'node_modules', 'socket.io', 'client-dist', 'socket.io.js'));
@@ -159,21 +161,21 @@ class SilarWebServer {
     app.post('/api/process/pause', this.authenticateToken.bind(this), this.pauseProcess.bind(this));
     app.post('/api/process/resume', this.authenticateToken.bind(this), this.resumeProcess.bind(this));
     app.post('/api/process/stop', this.authenticateToken.bind(this), this.stopProcess.bind(this));
-    
+
     // Rutas API Configuración (solo admin)
     app.get('/api/config', this.authenticateToken.bind(this), this.getSystemConfig.bind(this));
     app.put('/api/config', this.authenticateToken.bind(this), this.updateSystemConfig.bind(this));
-    
+
     // Ruta pública para leer límites del sistema (todos los usuarios autenticados)
     app.get('/api/config/limits', this.authenticateToken.bind(this), this.getSystemLimits.bind(this));
-    
+
     // Rutas API Arduino
     app.get('/api/arduino/ports', this.getArduinoPorts.bind(this));
     app.post('/api/arduino/connect', this.connectArduino.bind(this));
     app.post('/api/arduino/disconnect', this.disconnectArduino.bind(this));
     app.get('/api/arduino/state', this.getArduinoState.bind(this));
     app.post('/api/arduino/command', this.sendArduinoCommand.bind(this));
-    
+
     // Rutas API Flash Arduino
     app.get('/api/arduino/flash/info', this.getFlashInfo.bind(this));
     app.post('/api/arduino/flash', this.flashArduino.bind(this));
@@ -184,10 +186,10 @@ class SilarWebServer {
 
     // Manejar rutas no encontradas
     app.use('*', (req, res) => {
-      res.status(404).json({ 
-        success: false, 
+      res.status(404).json({
+        success: false,
         message: 'Ruta no encontrada',
-        path: req.originalUrl 
+        path: req.originalUrl
       });
     });
 
@@ -202,10 +204,10 @@ class SilarWebServer {
   setupSocketHandlers() {
     this.io.on('connection', (socket) => {
       logger.info('Cliente WebSocket conectado', { socketId: socket.id });
-      
+
       // Enviar estado actual del Arduino al conectar
       socket.emit('arduino-state', this.arduinoController.getState());
-      
+
       // Manejar comandos Arduino desde el cliente
       socket.on('arduino-command', async (data) => {
         try {
@@ -213,7 +215,7 @@ class SilarWebServer {
           const { command, params } = data;
           let result;
 
-          switch(command) {
+          switch (command) {
             case 'MODE_MANUAL':
               result = await this.arduinoController.setModeManual();
               break;
@@ -236,7 +238,7 @@ class SilarWebServer {
               socket.emit('arduino-error', { error: 'Comando desconocido' });
               return;
           }
-          
+
           socket.emit('arduino-command-result', { success: true, result });
         } catch (error) {
           logger.error('Error ejecutando comando Arduino:', error);
@@ -248,7 +250,7 @@ class SilarWebServer {
         logger.info('Cliente WebSocket desconectado', { socketId: socket.id });
       });
     });
-    
+
     // Reenviar eventos del Arduino a todos los clientes conectados
     this.setupArduinoEventForwarding();
   }
@@ -259,24 +261,24 @@ class SilarWebServer {
       this.io.emit('arduino-data', parsed);
       logger.debug('Arduino data broadcast', { type: parsed.type });
     });
-    
+
     // Cambios de estado
     this.arduinoController.on('state-changed', (state) => {
       this.io.emit('arduino-state', state);
     });
-    
+
     // Conexión establecida
     this.arduinoController.on('connected', (data) => {
       this.io.emit('arduino-connected', data);
       logger.info('Arduino conectado - notificando clientes');
     });
-    
+
     // Desconexión
     this.arduinoController.on('disconnected', () => {
       this.io.emit('arduino-disconnected');
       logger.warn('Arduino desconectado - notificando clientes');
     });
-    
+
     // Errores
     this.arduinoController.on('error', (error) => {
       this.io.emit('arduino-error', error);
@@ -290,10 +292,10 @@ class SilarWebServer {
       logger.warn('Ya hay un intento de reconexión en curso, esperando...');
       return;
     }
-    
+
     try {
       this.isReconnecting = true;
-      
+
       // Cerrar conexión anterior si existe
       if (this.dbConnection) {
         try {
@@ -302,7 +304,7 @@ class SilarWebServer {
           // Ignorar errores al cerrar conexión anterior
         }
       }
-      
+
       this.dbConnection = await mysql.createConnection({
         host: config.database.host,
         user: config.database.user,
@@ -318,12 +320,12 @@ class SilarWebServer {
           return next();
         }
       });
-      
+
       // Establecer UTF-8 explícitamente en la conexión
       await this.dbConnection.execute("SET NAMES 'utf8mb4' COLLATE 'utf8mb4_unicode_ci'");
       await this.dbConnection.execute("SET CHARACTER SET utf8mb4");
       await this.dbConnection.execute("SET character_set_connection=utf8mb4");
-      
+
       // Manejar errores de conexión perdida
       this.dbConnection.on('error', async (err) => {
         if (err.code === 'PROTOCOL_CONNECTION_LOST' || err.code === 'ECONNRESET') {
@@ -341,7 +343,7 @@ class SilarWebServer {
           logger.error('Error de base de datos:', err);
         }
       });
-      
+
       logger.databaseConnected();
       this.isReconnecting = false;
     } catch (error) {
@@ -364,7 +366,7 @@ class SilarWebServer {
         throw error;
       }
     }
-    
+
     // Verificar que la conexión sigue activa
     try {
       await this.dbConnection.execute('SELECT 1');
@@ -386,9 +388,9 @@ class SilarWebServer {
   async loginUser(req, res) {
     try {
       const { username, password } = req.body;
-      
+
       console.log('🔐 Intento de login:', { username, password: '***' });
-      
+
       // Verificar conexión a BD
       if (!this.dbConnection) {
         console.error('❌ No hay conexión a la base de datos');
@@ -397,7 +399,7 @@ class SilarWebServer {
           message: 'Error de conexión a la base de datos'
         });
       }
-      
+
       // Validar datos de entrada
       const loginValidation = validator.validateLogin({ username, password });
       if (!loginValidation.isValid) {
@@ -415,37 +417,37 @@ class SilarWebServer {
         'SELECT id, username, password, full_name, role, email, is_active FROM users WHERE username = ? AND is_active = 1',
         [username]
       );
-      
+
       console.log('📊 Resultado BD:', rows.length, 'usuarios encontrados');
 
       if (rows.length === 0) {
         logger.warn('Intento de login fallido', { username, reason: 'Usuario no encontrado' });
-        return res.status(401).json({ 
-          success: false, 
-          message: 'Usuario no encontrado' 
+        return res.status(401).json({
+          success: false,
+          message: 'Usuario no encontrado'
         });
       }
 
       const user = rows[0];
       console.log('👤 Usuario encontrado:', { id: user.id, username: user.username, role: user.role });
-      
+
       // Verificar contraseña (MD5 simple para demo)
       const crypto = require('crypto');
       const hashedPassword = crypto.createHash('md5').update(password).digest('hex');
-      
+
       console.log('🔐 Verificando contraseña:', {
         passwordReceived: '***',
         passwordHashed: hashedPassword,
         passwordStored: user.password,
         match: user.password === hashedPassword
       });
-      
+
       if (user.password !== hashedPassword) {
         console.log('❌ Contraseña incorrecta');
         logger.warn('Intento de login fallido', { username, reason: 'Contraseña incorrecta' });
-        return res.status(401).json({ 
-          success: false, 
-          message: 'Contraseña incorrecta' 
+        return res.status(401).json({
+          success: false,
+          message: 'Contraseña incorrecta'
         });
       }
 
@@ -475,15 +477,17 @@ class SilarWebServer {
 
     } catch (error) {
       logger.apiError('POST', '/api/auth/login', error);
-      res.status(500).json({ 
-        success: false, 
-        message: 'Error interno del servidor' 
+      res.status(500).json({
+        success: false,
+        message: 'Error interno del servidor'
       });
     }
   }
 
   async getRecipes(req, res) {
     try {
+
+
       let query;
       let params = [];
 
@@ -521,9 +525,9 @@ class SilarWebServer {
       }
 
       const [rows] = await this.dbConnection.execute(query, params);
-      
+
       logger.info(`Recetas obtenidas: ${rows.length}`, { userId: req.user.id, role: req.user.role });
-      
+
       // Formatear la respuesta para mantener compatibilidad con el frontend
       const formattedRows = rows.map(row => ({
         ...row,
@@ -569,7 +573,7 @@ class SilarWebServer {
           // measTemp4: row.meas_temp4 || 0,
         }
       }));
-      
+
       res.json(formattedRows);
     } catch (error) {
       logger.apiError('GET', '/api/recipes', error, req.user?.id);
@@ -580,7 +584,7 @@ class SilarWebServer {
   async saveRecipe(req, res) {
     try {
       const { name, description, type, parameters } = req.body;
-      
+
       // Validar datos de receta
       const recipeValidation = validator.validateRecipe({ name, description, type });
       if (!recipeValidation.isValid) {
@@ -602,24 +606,24 @@ class SilarWebServer {
           });
         }
       }
-      
+
       // Iniciar transacción
       await this.dbConnection.beginTransaction();
-      
+
       try {
         // Insertar receta
         const [result] = await this.dbConnection.execute(
           'INSERT INTO recipes (name, description, type, created_by_user_id, created_at) VALUES (?, ?, ?, ?, NOW())',
           [
-            name, 
-            description || 'Receta creada por usuario', 
-            type || 'A', 
-            req.user.id 
+            name,
+            description || 'Receta creada por usuario',
+            type || 'A',
+            req.user.id
           ]
         );
-        
+
         const recipeId = result.insertId;
-        
+
         // Insertar parámetros (incluyendo tiempos de inmersión y ciclos)
         // Convertir valores booleanos a 0/1 para MySQL
         const fanValue = parameters?.fan ? 1 : 0;
@@ -627,7 +631,7 @@ class SilarWebServer {
         const exceptDripping2Value = parameters?.exceptDripping2 ? 1 : 0;
         const exceptDripping3Value = parameters?.exceptDripping3 ? 1 : 0;
         const exceptDripping4Value = parameters?.exceptDripping4 ? 1 : 0;
-        
+
         await this.dbConnection.execute(
           `INSERT INTO recipe_parameters 
            (recipe_id, duration, temperature, velocity_x, velocity_y, accel_x, accel_y, humidity_offset, temperature_offset,
@@ -665,16 +669,16 @@ class SilarWebServer {
             parameters?.dipSpeed || 0
           ]
         );
-        
+
         // Confirmar transacción
         await this.dbConnection.commit();
-        
+
         logger.recipeCreated(recipeId, name, req.user.id);
-        
-        res.json({ 
-          success: true, 
+
+        res.json({
+          success: true,
           message: 'Receta guardada correctamente',
-          recipeId: recipeId 
+          recipeId: recipeId
         });
       } catch (error) {
         // Revertir transacción en caso de error
@@ -683,9 +687,9 @@ class SilarWebServer {
       }
     } catch (error) {
       logger.apiError('POST', '/api/recipes', error, req.user?.id);
-      res.status(500).json({ 
+      res.status(500).json({
         success: false,
-        error: error.message 
+        error: error.message
       });
     }
   }
@@ -694,7 +698,7 @@ class SilarWebServer {
     try {
       const { id } = req.params;
       const { name, description, type, parameters } = req.body;
-      
+
       // Verificar conexión a la base de datos
       if (!this.dbConnection) {
         return res.status(503).json({
@@ -702,7 +706,7 @@ class SilarWebServer {
           message: 'Error de conexión con la base de datos. Por favor, verifique que MySQL esté ejecutándose.'
         });
       }
-      
+
       // Asegurar que la conexión esté activa
       try {
         await this.ensureDatabaseConnection();
@@ -712,10 +716,10 @@ class SilarWebServer {
           message: 'Error de conexión con la base de datos. Por favor, verifique que MySQL esté ejecutándose.'
         });
       }
-      
+
       // Validar ID
       const recipeId = validator.validateId(id, 'recipeId');
-      
+
       // Validar datos de receta
       const recipeValidation = validator.validateRecipe({ name, description, type });
       if (!recipeValidation.isValid) {
@@ -731,16 +735,16 @@ class SilarWebServer {
         'SELECT * FROM recipes WHERE id = ? AND is_active = 1',
         [recipeId]
       );
-      
+
       if (existingRecipe.length === 0) {
-        return res.status(404).json({ 
-          success: false, 
-          message: 'Receta no encontrada' 
+        return res.status(404).json({
+          success: false,
+          message: 'Receta no encontrada'
         });
       }
-      
+
       const recipe = existingRecipe[0];
-      
+
       // Verificar permisos (admin o creador de la receta)
       if (recipe.created_by_user_id !== req.user.id && req.user.role !== 'admin') {
         logger.warn('Intento de edición no autorizada', {
@@ -748,27 +752,27 @@ class SilarWebServer {
           recipeId: recipeId,
           recipeOwner: recipe.created_by_user_id
         });
-        return res.status(403).json({ 
-          success: false, 
-          message: 'No tiene permisos para editar esta receta' 
+        return res.status(403).json({
+          success: false,
+          message: 'No tiene permisos para editar esta receta'
         });
       }
-      
+
       // Iniciar transacción
       await this.dbConnection.beginTransaction();
-      
+
       try {
         // Actualizar la receta
         await this.dbConnection.execute(
           'UPDATE recipes SET name = ?, description = ?, type = ?, updated_at = NOW() WHERE id = ?',
           [
-            name, 
-            description || recipe.description, 
-            type || recipe.type, 
-            recipeId 
+            name,
+            description || recipe.description,
+            type || recipe.type,
+            recipeId
           ]
         );
-        
+
         // Actualizar o insertar parámetros (incluyendo tiempos de inmersión y ciclos)
         // Convertir valores booleanos a 0/1 para MySQL
         const fanValue = parameters?.fan ? 1 : 0;
@@ -776,7 +780,7 @@ class SilarWebServer {
         const exceptDripping2Value = parameters?.exceptDripping2 ? 1 : 0;
         const exceptDripping3Value = parameters?.exceptDripping3 ? 1 : 0;
         const exceptDripping4Value = parameters?.exceptDripping4 ? 1 : 0;
-        
+
         const paramsArray = [
           recipeId,
           parameters?.duration || 0,
@@ -806,14 +810,14 @@ class SilarWebServer {
           parameters?.transferSpeed || 0,
           parameters?.dipSpeed || 0
         ];
-        
+
         // Log para depuración
         logger.debug(`Actualizando parámetros de receta ${recipeId}`, {
           columnCount: 24,
           valueCount: paramsArray.length,
           params: paramsArray
         });
-        
+
         await this.dbConnection.execute(
           `INSERT INTO recipe_parameters 
            (recipe_id, duration, temperature, velocity_x, velocity_y, accel_x, accel_y, humidity_offset, temperature_offset,
@@ -848,14 +852,14 @@ class SilarWebServer {
            updated_at = NOW()`,
           paramsArray
         );
-        
+
         // Confirmar transacción
         await this.dbConnection.commit();
-        
+
         logger.recipeUpdated(recipeId, name, req.user.id);
-        
-        res.json({ 
-          success: true, 
+
+        res.json({
+          success: true,
           message: 'Receta actualizada correctamente',
           updatedRecipe: {
             id: recipeId,
@@ -873,14 +877,14 @@ class SilarWebServer {
       }
     } catch (error) {
       logger.apiError('PUT', `/api/recipes/${req.params.id}`, error, req.user?.id);
-      
+
       // Determinar código de estado según el tipo de error
       let statusCode = 500;
       let errorMessage = error.message || 'Error interno del servidor';
-      
+
       // Verificar si es un error de conexión perdida
-      if (error.code === 'PROTOCOL_CONNECTION_LOST' || error.code === 'ECONNRESET' || 
-          error.code === 'ETIMEDOUT' || error.fatal === true) {
+      if (error.code === 'PROTOCOL_CONNECTION_LOST' || error.code === 'ECONNRESET' ||
+        error.code === 'ETIMEDOUT' || error.fatal === true) {
         statusCode = 503;
         errorMessage = 'La conexión con la base de datos se perdió. Por favor, verifique que MySQL esté ejecutándose.';
         // Intentar reconectar
@@ -896,13 +900,13 @@ class SilarWebServer {
         errorMessage = error.message || 'Datos de receta inválidos';
       }
       // Errores de base de datos MySQL
-      else if (error.code?.startsWith('ER_') || error.code === 'ECONNREFUSED' || 
-               error.code === 'ENOTFOUND' || error.sqlMessage) {
+      else if (error.code?.startsWith('ER_') || error.code === 'ECONNREFUSED' ||
+        error.code === 'ENOTFOUND' || error.sqlMessage) {
         statusCode = 503;
         errorMessage = error.sqlMessage || 'Error de conexión con la base de datos. Verifique que MySQL esté ejecutándose.';
       }
-      
-      res.status(statusCode).json({ 
+
+      res.status(statusCode).json({
         success: false,
         message: errorMessage,
         error: process.env.NODE_ENV === 'development' ? error.message : undefined
@@ -913,25 +917,25 @@ class SilarWebServer {
   async deleteRecipe(req, res) {
     try {
       const { id } = req.params;
-      
+
       // Validar ID
       const recipeId = validator.validateId(id, 'recipeId');
-      
+
       // Verificar que la receta existe
       const [existingRecipe] = await this.dbConnection.execute(
         'SELECT * FROM recipes WHERE id = ? AND is_active = 1',
         [recipeId]
       );
-      
+
       if (existingRecipe.length === 0) {
-        return res.status(404).json({ 
-          success: false, 
-          message: 'Receta no encontrada' 
+        return res.status(404).json({
+          success: false,
+          message: 'Receta no encontrada'
         });
       }
-      
+
       const recipe = existingRecipe[0];
-      
+
       // Verificar permisos (admin o creador de la receta)
       if (recipe.created_by_user_id !== req.user.id && req.user.role !== 'admin') {
         logger.warn('Intento de eliminación no autorizada', {
@@ -939,29 +943,29 @@ class SilarWebServer {
           recipeId: recipeId,
           recipeOwner: recipe.created_by_user_id
         });
-        return res.status(403).json({ 
-          success: false, 
-          message: 'No tiene permisos para eliminar esta receta' 
+        return res.status(403).json({
+          success: false,
+          message: 'No tiene permisos para eliminar esta receta'
         });
       }
-      
+
       // Eliminar la receta (soft delete)
       await this.dbConnection.execute(
         'UPDATE recipes SET is_active = 0, deleted_at = NOW() WHERE id = ?',
         [recipeId]
       );
-      
+
       logger.recipeDeleted(recipeId, recipe.name, req.user.id);
-      
-      res.json({ 
-        success: true, 
-        message: 'Receta eliminada correctamente' 
+
+      res.json({
+        success: true,
+        message: 'Receta eliminada correctamente'
       });
     } catch (error) {
       logger.apiError('DELETE', `/api/recipes/${req.params.id}`, error, req.user?.id);
-      res.status(500).json({ 
+      res.status(500).json({
         success: false,
-        error: error.message 
+        error: error.message
       });
     }
   }
@@ -997,9 +1001,9 @@ class SilarWebServer {
     try {
       const { port, baudRate } = req.body;
       await this.arduinoController.connect(port, baudRate || 9600);
-      
+
       logger.info('Arduino conectado exitosamente', { port });
-      
+
       res.json({
         success: true,
         message: 'Arduino conectado exitosamente',
@@ -1017,9 +1021,9 @@ class SilarWebServer {
   async disconnectArduino(req, res) {
     try {
       await this.arduinoController.disconnect();
-      
+
       logger.info('Arduino desconectado');
-      
+
       res.json({
         success: true,
         message: 'Arduino desconectado'
@@ -1037,7 +1041,7 @@ class SilarWebServer {
     try {
       // Si se solicita actualizar desde el Arduino, hacerlo
       const refresh = req.query.refresh === 'true';
-      
+
       if (refresh && this.arduinoController.isConnected) {
         try {
           await this.arduinoController.requestStatus();
@@ -1047,7 +1051,7 @@ class SilarWebServer {
           logger.warn('No se pudo actualizar estado desde Arduino:', error.message);
         }
       }
-      
+
       const state = this.arduinoController.getState();
       res.json({
         success: true,
@@ -1066,7 +1070,7 @@ class SilarWebServer {
   async sendArduinoCommand(req, res) {
     try {
       const { command, params } = req.body;
-      
+
       if (!command) {
         return res.status(400).json({
           success: false,
@@ -1076,7 +1080,7 @@ class SilarWebServer {
 
       let result;
 
-      switch(command) {
+      switch (command) {
         case 'MODE_MANUAL':
           result = await this.arduinoController.setModeManual();
           break;
@@ -1145,7 +1149,7 @@ class SilarWebServer {
   async flashArduino(req, res) {
     // Funcionalidad de flash no disponible - flasher module no incluido
     logger.warn('Intento de flashear Arduino - funcionalidad no disponible');
-    
+
     res.status(501).json({
       success: false,
       message: 'Funcionalidad de flash automático no disponible.',
@@ -1208,9 +1212,9 @@ class SilarWebServer {
       });
     } catch (error) {
       logger.apiError('GET', '/api/process/status', error, req.user?.id);
-      res.status(500).json({ 
+      res.status(500).json({
         success: false,
-        error: error.message 
+        error: error.message
       });
     }
   }
@@ -1218,7 +1222,7 @@ class SilarWebServer {
   async startProcess(req, res) {
     try {
       const { recipeId } = req.body;
-      
+
       if (!recipeId) {
         return res.status(400).json({
           success: false,
@@ -1259,7 +1263,7 @@ class SilarWebServer {
 
       // Validar ID
       const validRecipeId = validator.validateId(recipeId, 'recipeId');
-      
+
       // Obtener los parámetros de la receta
       const [recipes] = await this.dbConnection.execute(
         `SELECT r.*, rp.* 
@@ -1278,27 +1282,27 @@ class SilarWebServer {
 
       const recipe = recipes[0];
       const parameters = {
-        duration: recipe.duration || 0,
-        temperature: recipe.temperature || 0,
-        velocityY: recipe.velocity_y || 0,
-        velocityZ: recipe.velocity_x || 0, // Nota: velocity_x se usa para Z según el esquema
-        accelY: recipe.accel_y || 0,
-        accelZ: recipe.accel_x || 0,
-        dippingWait0: recipe.dipping_wait0 || 0,
-        dippingWait1: recipe.dipping_wait1 || 0,
-        dippingWait2: recipe.dipping_wait2 || 0,
-        dippingWait3: recipe.dipping_wait3 || 0,
-        transferWait: recipe.transfer_wait || 0,
-        cycles: recipe.cycles || 1,
+        duration: Number(recipe.duration) || 0,
+        temperature: Number(recipe.temperature) || 0,
+        velocityY: Number(recipe.velocity_y) || 0,
+        velocityZ: Number(recipe.velocity_x) || 0, // Nota: velocity_x se usa para Z según el esquema
+        accelY: Number(recipe.accel_y) || 0,
+        accelZ: Number(recipe.accel_x) || 0,
+        dippingWait0: Number(recipe.dipping_wait0) || 0,
+        dippingWait1: Number(recipe.dipping_wait1) || 0,
+        dippingWait2: Number(recipe.dipping_wait2) || 0,
+        dippingWait3: Number(recipe.dipping_wait3) || 0,
+        transferWait: Number(recipe.transfer_wait) || 0,
+        cycles: Number(recipe.cycles) || 1,
         fan: recipe.fan || false,
         exceptDripping1: recipe.except_dripping1 || false,
         exceptDripping2: recipe.except_dripping2 || false,
         exceptDripping3: recipe.except_dripping3 || false,
         exceptDripping4: recipe.except_dripping4 || false,
-        dipStartPosition: recipe.dip_start_position || 0,
-        dippingLength: recipe.dipping_length || 0,
-        transferSpeed: recipe.transfer_speed || 0,
-        dipSpeed: recipe.dip_speed || 0
+        dipStartPosition: Number(recipe.dip_start_position) || 0,
+        dippingLength: Number(recipe.dipping_length) || 0,
+        transferSpeed: Number(recipe.transfer_speed) || 0,
+        dipSpeed: Number(recipe.dip_speed) || 0
       };
 
       // Verificar conexión con Arduino antes de iniciar proceso
@@ -1333,11 +1337,11 @@ class SilarWebServer {
           // Cambiar a modo automático
           await this.arduinoController.setModeAutomatic();
           logger.info('Arduino configurado en modo automático', { processId, recipeId: validRecipeId });
-          
+
           // Enviar parámetros de la receta al Arduino para iniciar el proceso automático
           await this.arduinoController.startRecipe(parameters);
           logger.info('Proceso automático iniciado en Arduino', { processId, recipeId: validRecipeId, parameters });
-          
+
         } catch (arduinoError) {
           logger.error('Error enviando comandos al Arduino al iniciar proceso:', arduinoError);
           // No fallar el proceso si hay error con Arduino, solo loguear
@@ -1346,9 +1350,9 @@ class SilarWebServer {
       }
 
       logger.processStarted(processId, validRecipeId, req.user?.id);
-      
-      res.json({ 
-        success: true, 
+
+      res.json({
+        success: true,
         message: 'Proceso iniciado correctamente',
         processId: processId,
         processNumber: processData[0].process_number,
@@ -1356,9 +1360,9 @@ class SilarWebServer {
       });
     } catch (error) {
       logger.apiError('POST', '/api/process/start', error, req.user?.id);
-      res.status(500).json({ 
+      res.status(500).json({
         success: false,
-        error: error.message 
+        error: error.message
       });
     }
   }
@@ -1412,21 +1416,21 @@ class SilarWebServer {
         [process.id]
       );
 
-      logger.info('Proceso pausado', { 
-        processId: process.id, 
-        userId: req.user?.id 
+      logger.info('Proceso pausado', {
+        processId: process.id,
+        userId: req.user?.id
       });
-      
-      res.json({ 
-        success: true, 
+
+      res.json({
+        success: true,
         message: 'Proceso pausado correctamente',
         processId: process.id
       });
     } catch (error) {
       logger.apiError('POST', '/api/process/pause', error, req.user?.id);
-      res.status(500).json({ 
+      res.status(500).json({
         success: false,
-        error: error.message 
+        error: error.message
       });
     }
   }
@@ -1480,21 +1484,21 @@ class SilarWebServer {
         [process.id]
       );
 
-      logger.info('Proceso reanudado', { 
-        processId: process.id, 
-        userId: req.user?.id 
+      logger.info('Proceso reanudado', {
+        processId: process.id,
+        userId: req.user?.id
       });
-      
-      res.json({ 
-        success: true, 
+
+      res.json({
+        success: true,
         message: 'Proceso reanudado correctamente',
         processId: process.id
       });
     } catch (error) {
       logger.apiError('POST', '/api/process/resume', error, req.user?.id);
-      res.status(500).json({ 
+      res.status(500).json({
         success: false,
-        error: error.message 
+        error: error.message
       });
     }
   }
@@ -1530,7 +1534,7 @@ class SilarWebServer {
       const process = runningProcesses[0];
       const startTime = process.start_time;
       const endTime = new Date();
-      const durationMinutes = startTime 
+      const durationMinutes = startTime
         ? Math.floor((endTime - new Date(startTime)) / 60000)
         : 0;
 
@@ -1556,21 +1560,21 @@ class SilarWebServer {
         [durationMinutes, process.id]
       );
 
-      logger.info('Proceso detenido', { 
-        processId: process.id, 
-        userId: req.user?.id 
+      logger.info('Proceso detenido', {
+        processId: process.id,
+        userId: req.user?.id
       });
-      
-      res.json({ 
-        success: true, 
+
+      res.json({
+        success: true,
         message: 'Proceso detenido correctamente',
         processId: process.id
       });
     } catch (error) {
       logger.apiError('POST', '/api/process/stop', error, req.user?.id);
-      res.status(500).json({ 
+      res.status(500).json({
         success: false,
-        error: error.message 
+        error: error.message
       });
     }
   }
@@ -1617,7 +1621,7 @@ class SilarWebServer {
         if (!configByCategory[row.category]) {
           configByCategory[row.category] = [];
         }
-        
+
         // Convertir valores según el tipo
         let value = row.config_value;
         if (row.config_type === 'number') {
@@ -1631,7 +1635,7 @@ class SilarWebServer {
             value = value;
           }
         }
-        
+
         configByCategory[row.category].push({
           key: row.config_key,
           value: value,
@@ -1703,7 +1707,7 @@ class SilarWebServer {
 
       try {
         const updates = [];
-        
+
         // Actualizar cada configuración
         for (const [key, value] of Object.entries(config)) {
           // Obtener el tipo de configuración
@@ -1722,18 +1726,18 @@ class SilarWebServer {
             // Convertir valor según el tipo
             let stringValue = String(value);
             const configType = configRow[0].config_type;
-            
+
             if (configType === 'json' && typeof value === 'object') {
               stringValue = JSON.stringify(value);
             }
-            
+
             // Actualizar configuración existente
             await this.dbConnection.execute(
               'UPDATE system_config SET config_value = ?, updated_by = ?, updated_at = NOW() WHERE config_key = ?',
               [stringValue, req.user.username, key]
             );
           }
-          
+
           updates.push(key);
         }
 
@@ -1820,16 +1824,19 @@ class SilarWebServer {
   }
 
   async initialize() {
-    await this.initDatabase();
-    
-    // Intentar conectar con Arduino automáticamente
+    try {
+      await this.initDatabase();
+    } catch (dbError) {
+      logger.error('Error crítico: No se pudo conectar a la base de datos al arrancar el servidor:', dbError);
+    }
+
     try {
       await this.arduinoController.connect();
       logger.info('Arduino conectado automáticamente');
     } catch (error) {
       logger.warn('Arduino no disponible al inicio. Se puede conectar manualmente desde la interfaz.', { error: error.message });
     }
-    
+
     logger.systemStart();
   }
 }

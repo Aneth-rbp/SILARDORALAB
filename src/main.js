@@ -14,10 +14,17 @@ let serverProcess = null;
 // Mantener una referencia global del objeto de ventana
 let mainWindow;
 
+// Cargar datos de la aplicación dinámicamente desde el package.json
+const pkg = require('../package.json');
+const systemConfig = require('../config/app.config');
+
+const serverPort = systemConfig.app?.port || 3001;
+const serverUrl = `http://localhost:${serverPort}`;
+
 // Configuración de la aplicación
 const appConfig = {
-  name: 'SILAR System',
-  version: '2.0.0',
+  name: pkg.build?.productName || pkg.name || 'SILAR System',
+  version: pkg.version || '2.1.0',
   width: 1400,
   height: 900,
   minWidth: 1200,
@@ -52,7 +59,7 @@ function createWindow() {
   // Manejar errores de carga
   mainWindow.webContents.on('did-fail-load', (event, errorCode, errorDescription) => {
     console.error('Error cargando la aplicación:', errorDescription);
-    
+
     if (errorCode === -6 || errorCode === -105) {
       // Error de conexión - servidor no disponible
       console.log('Servidor no disponible, esperando a que se inicie...');
@@ -70,7 +77,7 @@ function createWindow() {
 function startServerAndLoad() {
   // Iniciar el servidor primero
   startServer();
-  
+
   // Esperar a que el servidor esté disponible antes de cargar
   waitForServer(() => {
     loadApplication();
@@ -79,38 +86,38 @@ function startServerAndLoad() {
 
 function waitForServer(callback, attempts = 0) {
   const maxAttempts = 30; // 30 intentos = 15 segundos máximo
-  
+
   if (attempts >= maxAttempts) {
-    console.error('Timeout esperando al servidor');
-    showServerError();
+    console.error('Timeout esperando al servidor. Forzando apertura de la ventana de la aplicación.');
+    callback();
     return;
   }
 
   const { net } = require('electron');
-  const request = net.request('http://localhost:3000/api/system/status');
-  
+  const request = net.request(`${serverUrl}/api/system/status`);
+
   request.on('response', () => {
     console.log('Servidor disponible, cargando aplicación...');
     callback();
   });
-  
+
   request.on('error', () => {
     // Servidor aún no está listo, esperar y reintentar
     setTimeout(() => {
       waitForServer(callback, attempts + 1);
     }, 500);
   });
-  
+
   request.end();
 }
 
 function loadApplication() {
   if (!mainWindow) return;
-  
-  // Cargar siempre desde el servidor local de Node.js (localhost:3000)
+
+  // Cargar siempre desde el servidor local de Node.js
   // Esto asegura que las llamadas API relativas (/api) y WebSockets conecten de forma nativa
-  mainWindow.loadURL('http://localhost:3000');
-  
+  mainWindow.loadURL(serverUrl);
+
   if (isDev) {
     // Abrir las herramientas de desarrollador en modo desarrollo
     mainWindow.webContents.openDevTools();
@@ -124,29 +131,38 @@ function loadApplication() {
 
 function checkServerStatus() {
   const { net } = require('electron');
-  
-  const request = net.request('http://localhost:3000/api/system/status');
+
+  const request = net.request(`${serverUrl}/api/system/status`);
   request.on('response', (response) => {
     console.log('Servidor web disponible');
   });
-  
+
   request.on('error', (error) => {
     console.error('Servidor web no disponible:', error);
     showServerError();
   });
-  
+
   request.end();
 }
 
+let errorDialogShowing = false;
+let serverErrorOutput = '';
+
 function showServerError() {
+  if (errorDialogShowing) return;
+  errorDialogShowing = true;
+
   dialog.showMessageBox(mainWindow, {
     type: 'warning',
     title: 'Servidor No Disponible',
-    message: 'El servidor web de SILAR System no está ejecutándose.',
-    detail: '¿Desea iniciar el servidor automáticamente?',
+    message: 'El servidor de fondo de SILAR System no pudo iniciarse correctamente.',
+    detail: serverErrorOutput 
+      ? `Detalles del error del servidor:\n\n${serverErrorOutput}` 
+      : '¿Desea intentar iniciar el servidor de fondo de nuevo automáticamente? Asegúrese de que no haya otra instancia corriendo.',
     buttons: ['Cancelar', 'Iniciar Servidor'],
     defaultId: 1
   }).then((result) => {
+    errorDialogShowing = false;
     if (result.response === 1) {
       startServer();
     }
@@ -156,10 +172,10 @@ function showServerError() {
 function startServer() {
   // En producción, usar la ruta correcta del ejecutable
   const isDev = process.argv.includes('--dev');
-  
+
   // Determinar la ruta del servidor según el entorno
   let serverPath, serverCwd;
-  
+
   if (isDev) {
     // Modo desarrollo: usar rutas relativas
     serverPath = path.join(__dirname, '..', 'server.js');
@@ -171,45 +187,59 @@ function startServer() {
     serverPath = path.join(appPath, 'server.js');
     serverCwd = appPath;
   }
-  
+
   console.log(`Iniciando servidor desde: ${serverPath}`);
   console.log(`Directorio de trabajo: ${serverCwd}`);
-  
-  // Iniciar el servidor web como proceso hijo
-  serverProcess = spawn('node', [serverPath], {
+
+  // Iniciar el servidor web como proceso hijo usando el propio ejecutable de Electron
+  serverProcess = spawn(process.execPath, [serverPath], {
     cwd: serverCwd,
     stdio: 'pipe',
     detached: false,
     env: {
       ...process.env,
       NODE_ENV: isDev ? 'development' : 'production',
-      ELECTRON_RUN_AS_NODE: '1'
+      ELECTRON_RUN_AS_NODE: '1',
+      USER_DATA_PATH: app.getPath('userData')
     }
   });
+
+  // Reiniciar acumulador de errores
+  serverErrorOutput = '';
 
   serverProcess.stdout.on('data', (data) => {
     console.log('Servidor:', data.toString());
   });
 
   serverProcess.stderr.on('data', (data) => {
-    console.error('Error del servidor:', data.toString());
+    const chunk = data.toString();
+    console.error('Error del servidor:', chunk);
+    serverErrorOutput += chunk;
+  });
+
+  serverProcess.on('error', (err) => {
+    console.error('Error al spawnear el proceso del servidor:', err);
+    serverErrorOutput += `Error del sistema: ${err.message}\n`;
   });
 
   serverProcess.on('close', (code) => {
     console.log('Servidor cerrado con código:', code);
-    // Intentar reiniciar si se cierra inesperadamente (solo en producción)
+    // Intentar reiniciar si se cierra inesperadamente (solo en producción, máx 3 reintentos)
     if (code !== 0 && !isDev) {
-      console.log('Reintentando iniciar servidor en 3 segundos...');
-      setTimeout(() => {
-        startServer();
-      }, 3000);
+      if (typeof global.serverStartAttempts === 'undefined') {
+        global.serverStartAttempts = 0;
+      }
+      if (global.serverStartAttempts < 3) {
+        global.serverStartAttempts++;
+        console.log(`Reintentando iniciar servidor (Intento ${global.serverStartAttempts}/3) en 3 segundos...`);
+        setTimeout(() => {
+          startServer();
+        }, 3000);
+      } else {
+        console.error('Se excedió el número máximo de reintentos para iniciar el servidor de fondo.');
+      }
     }
   });
-
-  // Esperar un momento para que el servidor se inicie
-  setTimeout(() => {
-    checkServerStatus();
-  }, 3000);
 }
 
 function createMenu() {
@@ -283,9 +313,9 @@ function createMenu() {
               title: 'Acerca de SILAR System',
               message: `${appConfig.name} v${appConfig.version}`,
               detail: 'Sistema de control para procesos químicos SILAR\nDesarrollado por DORA Lab'
-      });
-    }
-  }
+            });
+          }
+        }
       ]
     }
   ];
@@ -312,12 +342,12 @@ app.on('window-all-closed', () => {
   }
 });
 
-  // Cerrar el servidor cuando se cierre la aplicación
-  app.on('before-quit', () => {
-    if (serverProcess) {
-      serverProcess.kill();
-    }
-  });
+// Cerrar el servidor cuando se cierre la aplicación
+app.on('before-quit', () => {
+  if (serverProcess) {
+    serverProcess.kill();
+  }
+});
 
 // Manejar eventos IPC
 ipcMain.handle('get-app-info', () => {
@@ -331,16 +361,16 @@ ipcMain.handle('get-app-info', () => {
 ipcMain.handle('check-server', async () => {
   return new Promise((resolve) => {
     const { net } = require('electron');
-    const request = net.request('http://localhost:3000/api/system/status');
-    
+    const request = net.request(`${serverUrl}/api/system/status`);
+
     request.on('response', () => {
       resolve({ available: true });
     });
-    
+
     request.on('error', () => {
       resolve({ available: false });
     });
-    
+
     request.end();
   });
 });
