@@ -18,7 +18,6 @@ CREATE TABLE IF NOT EXISTS users (
     username VARCHAR(50) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL UNIQUE,
     password VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL,
     full_name VARCHAR(100) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL,
-    email VARCHAR(100) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci,
     role ENUM('admin', 'usuario') DEFAULT 'usuario',
     is_active BOOLEAN DEFAULT true,
     last_login TIMESTAMP NULL,
@@ -251,11 +250,11 @@ ON DUPLICATE KEY UPDATE config_value = VALUES(config_value);
 -- =====================================================
 -- Insertar Usuarios de Ejemplo
 -- =====================================================
-INSERT INTO users (username, password, full_name, email, role) VALUES
-('admin', MD5('admin123'), 'Administrador del Sistema', 'admin@silar.com', 'admin'),
-('dr.martinez', MD5('password123'), 'Dr. Juan Martínez', 'juan.martinez@lab.com', 'usuario'),
-('dr.garcia', MD5('password123'), 'Dr. María García', 'maria.garcia@lab.com', 'usuario'),
-('operador1', MD5('password123'), 'Operador Principal', 'operador@lab.com', 'usuario')
+INSERT INTO users (username, password, full_name, role) VALUES
+('admin', MD5('admin123'), 'Administrador del Sistema', 'admin'),
+('dr.martinez', MD5('password123'), 'Dr. Juan Martínez', 'usuario'),
+('dr.garcia', MD5('password123'), 'Dr. María García', 'usuario'),
+('operador1', MD5('password123'), 'Operador Principal', 'usuario')
 ON DUPLICATE KEY UPDATE full_name = VALUES(full_name);
 
 -- =====================================================

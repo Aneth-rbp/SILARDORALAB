@@ -1,8 +1,8 @@
-@echo off
-echo ========================================
-echo Configurando Base de Datos SILAR
 echo ========================================
 echo.
+
+REM Forzar UTF-8 en la consola de Windows
+chcp 65001 >nul
 
 REM Verificar que MySQL esté disponible
 echo 1. Verificando conexión a MySQL...
@@ -23,7 +23,7 @@ echo ✅ MySQL está ejecutándose correctamente
 
 REM Crear base de datos si no existe
 echo 2. Creando base de datos 'silar_db'...
-"C:\xampp\mysql\bin\mysql.exe" -u root -e "CREATE DATABASE IF NOT EXISTS silar_db CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;" >nul 2>&1
+"C:\xampp\mysql\bin\mysql.exe" --default-character-set=utf8mb4 -u root -e "CREATE DATABASE IF NOT EXISTS silar_db CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;" >nul 2>&1
 if errorlevel 1 (
     echo ❌ ERROR: No se pudo crear la base de datos
     pause
@@ -40,7 +40,7 @@ if not exist "database\schema.sql" (
     exit /b 1
 )
 
-"C:\xampp\mysql\bin\mysql.exe" -u root silar_db < database\schema.sql
+"C:\xampp\mysql\bin\mysql.exe" --default-character-set=utf8mb4 -u root silar_db < database\schema.sql
 if errorlevel 1 (
     echo ❌ ERROR: No se pudo ejecutar el script de esquema
     pause
@@ -60,7 +60,7 @@ if errorlevel 1 (
 
 REM Crear usuarios de prueba si no existen
 echo 5. Creando usuarios de prueba...
-"C:\xampp\mysql\bin\mysql.exe" -u root silar_db -e "INSERT INTO users (username, password, full_name, role) VALUES ('admin', MD5('admin123'), 'Administrador del Sistema', 'admin'), ('dr.martinez', MD5('password123'), 'Dr. Juan Martínez', 'usuario') ON DUPLICATE KEY UPDATE username=username;" >nul 2>&1
+"C:\xampp\mysql\bin\mysql.exe" --default-character-set=utf8mb4 -u root silar_db -e "INSERT INTO users (username, password, full_name, role) VALUES ('admin', MD5('admin123'), 'Administrador del Sistema', 'admin'), ('dr.martinez', MD5('password123'), 'Dr. Juan Martínez', 'usuario'), ('dr.garcia', MD5('password123'), 'Dr. María García', 'usuario') ON DUPLICATE KEY UPDATE full_name=VALUES(full_name);" >nul 2>&1
 
 echo ✅ Usuarios de prueba creados
 
@@ -79,8 +79,8 @@ echo ✅ Configuración completada exitosamente
 echo ========================================
 echo.
 echo Usuarios disponibles:
-echo - admin / 1234 (Administrador)
-echo - investigador1 / 1234 (Investigador)
+echo - admin / admin123 (Administrador)
+echo - dr.martinez / password123 (Investigador)
 echo.
 echo Configuración de base de datos:
 echo - Base de datos: silar_db

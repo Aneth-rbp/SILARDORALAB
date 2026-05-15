@@ -139,6 +139,23 @@ class DashboardScreen {
                             </div>
                         </div>
                     </div>
+
+                    ${isAdmin ? `
+                    <div class="col-xl-3 col-lg-4 col-md-6">
+                        <div class="card border-0 shadow-sm h-100 navigation-card" onclick="window.silarApp.navigateToScreen('users')">
+                            <div class="card-body text-center p-4">
+                                <div class="navigation-icon bg-secondary text-white mb-3" style="background-color: #6f42c1 !important;">
+                                    <i class="bi bi-people"></i>
+                                </div>
+                                <h5 class="card-title mb-2" style="color: #6f42c1;">Usuarios</h5>
+                                <p class="card-text text-muted">Administra usuarios y permisos</p>
+                                <div class="navigation-arrow">
+                                    <i class="bi bi-arrow-right-circle" style="color: #6f42c1;"></i>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    ` : ''}
                     
                   
                         </div>

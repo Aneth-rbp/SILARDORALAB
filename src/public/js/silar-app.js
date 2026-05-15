@@ -174,6 +174,28 @@ class SilarApp {
                 const roleText = this.userSession.role === 'admin' ? 'Administrador' : 'Usuario';
                 userRoleElement.textContent = roleText;
             }
+
+            // Añadir botón de administración de usuarios al dropdown si es admin
+            const userDropdown = document.getElementById('user-dropdown');
+            if (userDropdown && this.userSession.role === 'admin') {
+                // Verificar si ya existe el botón
+                if (!document.getElementById('admin-users-link')) {
+                    const adminLink = document.createElement('button');
+                    adminLink.id = 'admin-users-link';
+                    adminLink.className = 'dropdown-item';
+                    adminLink.innerHTML = '<i class="bi bi-people me-2"></i>Administrar Usuarios';
+                    adminLink.onclick = () => {
+                        this.navigateToScreen('users');
+                        document.getElementById('user-dropdown').classList.remove('show');
+                    };
+                    
+                    // Insertar antes del divisor de cerrar sesión
+                    const divider = userDropdown.querySelector('.dropdown-divider');
+                    if (divider) {
+                        userDropdown.insertBefore(adminLink, divider);
+                    }
+                }
+            }
         }
     }
 
@@ -475,7 +497,8 @@ class SilarApp {
             'process': 'Proceso',
             'monitoring': 'Monitoreo',
             'configuration': 'Configuración',
-            'manual': 'Control Manual'
+            'manual': 'Control Manual',
+            'users': 'Administración de Usuarios'
         };
         
         if (breadcrumb) {
@@ -519,6 +542,9 @@ class SilarApp {
                     break;
                 case 'manual':
                     content = await this.loadManualContent();
+                    break;
+                case 'users':
+                    content = UsersScreen.getTemplate();
                     break;
                 default:
                     content = '<div class="alert alert-warning">Pantalla no encontrada</div>';
@@ -568,6 +594,11 @@ class SilarApp {
             case 'manual':
                 if (window.ManualScreen) {
                     this.activeScreenInstance = new ManualScreen(this);
+                }
+                break;
+            case 'users':
+                if (window.UsersScreen) {
+                    this.activeScreenInstance = new UsersScreen(this);
                 }
                 break;
         }
