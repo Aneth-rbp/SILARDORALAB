@@ -1732,8 +1732,8 @@ body:not(.login-page) {
 /* Contenido principal */
 .main-content {
     margin: 0 !important;
-    margin-top: 60px !important;
-    padding: 1rem !important;
+    margin-top: 80px !important;
+    padding: 1.5rem !important;
     min-height: calc(100vh - 80px);
     max-width: 100vw !important;
     width: 100vw !important;
@@ -2595,6 +2595,239 @@ body:not(.login-page) {
     min-height: 120px;
 }
 
+/* === MONITORING PREMIUM REDESIGN === */
+
+.monitoring-tabs-container {
+    margin-top: 25px;
+    background: rgba(255, 255, 255, 0.7);
+    backdrop-filter: blur(10px);
+    border-radius: 16px;
+    padding: 15px 12px; /* Más espacio uniforme para evitar recortes */
+    border: 1px solid rgba(0, 0, 0, 0.05);
+}
+
+.custom-monitoring-tabs {
+    display: flex;
+    gap: 8px;
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    scrollbar-width: none;
+}
+
+.custom-monitoring-tabs::-webkit-scrollbar {
+    display: none;
+}
+
+.custom-monitoring-tabs .nav-link {
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    min-width: 120px;
+    height: 45px;
+    border-radius: 10px;
+    color: #4b5563;
+    background: #f3f4f6;
+    border: 1px solid rgba(0,0,0,0.05);
+    transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+    font-size: 0.8rem;
+    font-weight: 600;
+    margin-bottom: 5px;
+}
+
+.custom-monitoring-tabs .nav-link i {
+    font-size: 1.1rem;
+    margin-bottom: 0;
+}
+
+.custom-monitoring-tabs .nav-link:hover {
+    background: #e5e7eb;
+    color: var(--primary-color);
+}
+
+.custom-monitoring-tabs .nav-link.active {
+    background: #1e293b !important; /* Azul Doralab / Header */
+    color: white !important;
+    /* Sin transformaciones para evitar recortes en pantallas pequeñas */
+}
+
+/* Premium Variable Cards - Balanced for Vertical Grid */
+.variable-card-premium {
+    background: white;
+    border: 1px solid rgba(0,0,0,0.08);
+    border-radius: 16px;
+    transition: all 0.3s ease;
+    overflow: hidden;
+    box-shadow: 0 4px 6px rgba(0,0,0,0.02);
+    height: 100%;
+}
+
+.variable-card-premium:hover {
+    transform: translateY(-5px);
+    box-shadow: 0 12px 25px rgba(0,0,0,0.08);
+}
+
+.category-tag {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 10px;
+    background: rgba(var(--primary-rgb), 0.08);
+    color: var(--primary-color);
+    border-radius: 8px;
+    font-size: 0.65rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+.status-dot {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+}
+
+.status-dot.status-ok {
+    background: #10b981;
+    box-shadow: 0 0 8px rgba(16, 185, 129, 0.4);
+}
+
+.variable-label {
+    color: #4b5563;
+    font-weight: 600;
+    font-size: 0.9rem;
+    margin-bottom: 8px;
+    line-height: 1.2;
+}
+
+.variable-value-container {
+    display: flex;
+    align-items: baseline;
+    gap: 4px;
+    margin-bottom: 12px;
+}
+
+.variable-value {
+    font-size: 2rem;
+    font-weight: 800;
+    color: #1f2937;
+    letter-spacing: -1px;
+}
+
+.variable-unit {
+    font-size: 0.9rem;
+    font-weight: 600;
+    color: #9ca3af;
+}
+
+.variable-footer {
+    border-top: 1px solid rgba(0,0,0,0.03);
+    padding-top: 10px;
+}
+
+.variable-desc {
+    font-size: 0.7rem;
+    color: #6b7280;
+    margin: 0;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+}
+
+.monitoring-grid-wrapper {
+    height: calc(100vh - 350px); /* Altura reducida para ser más compacto */
+    overflow-y: auto;
+    overflow-x: hidden;
+    padding: 5px 15px 20px 5px;
+    scrollbar-width: thin;
+    scrollbar-color: rgba(0,0,0,0.1) transparent;
+}
+
+.monitoring-grid-wrapper #variables-grid {
+    flex-wrap: wrap; /* Permitir que las tarjetas bajen */
+    margin: 0;
+}
+
+/* Scrollbar vertical sutil */
+.monitoring-grid-wrapper::-webkit-scrollbar {
+    width: 6px;
+    display: block;
+}
+
+.monitoring-grid-wrapper::-webkit-scrollbar-track {
+    background: transparent;
+}
+
+.monitoring-grid-wrapper::-webkit-scrollbar-thumb {
+    background: rgba(0,0,0,0.1);
+    border-radius: 10px;
+}
+
+.monitoring-grid-wrapper::-webkit-scrollbar-thumb:hover {
+    background: rgba(0,0,0,0.2);
+}
+
+.x-small {
+    font-size: 0.65rem !important;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    font-weight: 700;
+}
+
+.ultra-compact {
+    padding-top: 0.2rem !important;
+    padding-bottom: 0.2rem !important;
+    font-size: 0.85rem !important;
+    height: auto !important;
+    min-height: 28px !important;
+}
+
+.card-compact .card-header {
+    padding-top: 0.25rem !important;
+    padding-bottom: 0.25rem !important;
+}
+
+.card-compact .card-body {
+    padding: 0.5rem !important;
+}
+
+.card-compact h6 {
+    font-size: 0.85rem !important;
+}
+
+.card-compact .btn {
+    font-size: 0.85rem !important;
+}
+
+/* Configuration Controlled Scroll Area */
+.config-scroll-wrapper {
+    height: auto;
+    max-height: calc(100vh - 280px);
+    overflow-y: auto;
+    overflow-x: hidden;
+    padding-right: 10px;
+    scrollbar-width: thin;
+    scrollbar-color: rgba(0,0,0,0.1) transparent;
+}
+
+.status-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    display: inline-block;
+}
+
+.config-scroll-wrapper::-webkit-scrollbar {
+    width: 6px;
+}
+
+.config-scroll-wrapper::-webkit-scrollbar-thumb {
+    background: rgba(0,0,0,0.1);
+    border-radius: 10px;
+}
+
 /* Compact list style for left column cards (no details on card) */
 .recipe-card.compact {
     display: flex;
@@ -2606,6 +2839,7 @@ body:not(.login-page) {
     border: 2px solid #e2e8f0;
     background: linear-gradient(135deg, #ffffff 0%, #f1f5f9 100%);
     box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06);
+}
     transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
     cursor: pointer;
     position: relative;

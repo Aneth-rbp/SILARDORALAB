@@ -54,12 +54,39 @@ class ResponseParser {
         const errorResult = this.parseError(trimmedLine);
         if (errorResult) return errorResult;
 
+        // Intentar parsear como sensores (Temperatura/Humedad)
+        const sensorsResult = this.parseSensors(trimmedLine);
+        if (sensorsResult) return sensorsResult;
+
         // Si no coincide con ningún patrón, retornar mensaje genérico
         return {
             type: 'message',
             raw: trimmedLine,
             timestamp: new Date().toISOString()
         };
+    }
+
+    /**
+     * Parsea lecturas de sensores (Temperatura y Humedad)
+     */
+    static parseSensors(line) {
+        // Patrones comunes: "T:25.5,H:60.0" o "Temp=25.5,Hum=60.0"
+        const tempMatch = line.match(/(?:T|Temp)[:=]\s*(-?\d+\.?\d*)/i);
+        const humMatch = line.match(/(?:H|Hum|Humidity)[:=]\s*(\d+\.?\d*)/i);
+
+        if (tempMatch || humMatch) {
+            const data = {
+                type: 'sensors',
+                timestamp: new Date().toISOString()
+            };
+
+            if (tempMatch) data.envTemp = parseFloat(tempMatch[1]);
+            if (humMatch) data.envHumidity = parseFloat(humMatch[1]);
+
+            return data;
+        }
+
+        return null;
     }
 
     /**

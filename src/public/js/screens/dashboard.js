@@ -14,6 +14,13 @@ class DashboardScreen {
     init() {
     }
 
+    destroy() {
+        if (this.statsInterval) {
+            clearInterval(this.statsInterval);
+            this.statsInterval = null;
+        }
+    }
+
 
 
 
@@ -36,7 +43,7 @@ class DashboardScreen {
 
     static getTemplate(userRole = 'usuario') {
         const isAdmin = userRole === 'admin';
-        
+
         return `
             <div class="dashboard-container">
                 <!-- Welcome Header -->

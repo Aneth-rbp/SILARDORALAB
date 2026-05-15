@@ -12,6 +12,11 @@ class RecipesScreen {
         this.systemConfig = null; // Configuraciones del sistema (límites y defaults)
         this.processStatus = null; // Estado del proceso actual
         this.processStatusCheckInterval = null; // Intervalo para verificar estado del proceso
+        
+        // Binds para poder remover listeners
+        this.handleRecipeSelection = this.handleRecipeSelection.bind(this);
+        this.handleProcessStatusChanged = this.handleProcessStatusChanged.bind(this);
+        
         this.init();
     }
 
@@ -44,9 +49,20 @@ class RecipesScreen {
         this.startProcessStatusMonitoring();
         
         // Escuchar eventos de cambio de estado del proceso
-        document.addEventListener('process-status-changed', () => {
-            this.checkProcessStatus();
-        });
+        document.addEventListener('process-status-changed', this.handleProcessStatusChanged);
+    }
+
+    handleProcessStatusChanged() {
+        this.checkProcessStatus();
+    }
+
+    destroy() {
+        console.log('RecipesScreen destroyed');
+        this.stopProcessStatusMonitoring();
+        
+        // Remover listeners globales
+        document.removeEventListener('click', this.handleRecipeSelection);
+        document.removeEventListener('process-status-changed', this.handleProcessStatusChanged);
     }
 
     /**
@@ -129,12 +145,7 @@ class RecipesScreen {
         });
 
         // Recipe selection
-        document.addEventListener('click', (e) => {
-            if (e.target.closest('.recipe-card')) {
-                const recipeId = e.target.closest('.recipe-card').getAttribute('data-recipe-id');
-                this.selectRecipe(recipeId);
-            }
-        });
+        document.addEventListener('click', this.handleRecipeSelection);
 
         // Execute recipe button
         document.getElementById('execute-recipe-btn')?.addEventListener('click', () => {
@@ -155,6 +166,13 @@ class RecipesScreen {
         document.getElementById('recipe-search')?.addEventListener('input', (e) => {
             this.filterRecipes(e.target.value);
         });
+    }
+
+    handleRecipeSelection(e) {
+        if (e.target.closest('.recipe-card')) {
+            const recipeId = e.target.closest('.recipe-card').getAttribute('data-recipe-id');
+            this.selectRecipe(recipeId);
+        }
     }
 
     filterRecipes(searchTerm) {
@@ -372,7 +390,7 @@ class RecipesScreen {
                     
                     <div class="params-grid">
                         <div class="param-item">
-                            <span class="param-label">Duración</span>
+                            <span class="param-label">Duración estimada</span>
                             <span class="param-value">${params.duration || '--'} min</span>
                         </div>
                         <div class="param-item">
@@ -601,9 +619,74 @@ class RecipesScreen {
         // Agregar validación en tiempo real
         this.setupFormValidation(form, maxVelocityY, maxVelocityZ, maxAccelY, maxAccelZ);
 
+        // NUEVO: Configurar autocálculo de duración
+        this.setupAutoDurationCalculation(form);
+
         // Bind save event
         const saveBtn = document.getElementById('save-recipe-btn');
         saveBtn.onclick = () => this.saveRecipe(recipe?.id);
+    }
+
+    /**
+     * Configura el cálculo automático de la duración basada en los parámetros
+     */
+    setupAutoDurationCalculation(form) {
+        const durationInput = form.querySelector('#recipe-duration');
+        if (durationInput) {
+            durationInput.readOnly = true;
+            durationInput.classList.add('bg-light');
+            durationInput.style.cursor = 'not-allowed';
+            durationInput.title = 'Calculado automáticamente según los parámetros de la receta';
+        }
+
+        // Lista de IDs que afectan a la duración
+        const triggerIds = [
+            'recipe-dipping-wait0', 'recipe-dipping-wait1', 'recipe-dipping-wait2', 'recipe-dipping-wait3',
+            'recipe-transfer-wait', 'recipe-cycles', 'recipe-dip-speed', 'recipe-dipping-length'
+        ];
+
+        const updateFn = () => this.updateAutoDuration(form);
+
+        triggerIds.forEach(id => {
+            form.querySelector(`#${id}`)?.addEventListener('input', updateFn);
+        });
+
+        // Calcular valor inicial
+        updateFn();
+    }
+
+    /**
+     * Realiza el cálculo de duración y lo muestra en el formulario
+     */
+    updateAutoDuration(form) {
+        const dippingWait0 = parseInt(form.querySelector('#recipe-dipping-wait0').value) || 0;
+        const dippingWait1 = parseInt(form.querySelector('#recipe-dipping-wait1').value) || 0;
+        const dippingWait2 = parseInt(form.querySelector('#recipe-dipping-wait2').value) || 0;
+        const dippingWait3 = parseInt(form.querySelector('#recipe-dipping-wait3').value) || 0;
+        const transferWait = parseInt(form.querySelector('#recipe-transfer-wait').value) || 0;
+        const cycles = parseInt(form.querySelector('#recipe-cycles').value) || 1;
+        
+        // Tiempo de movimiento (estimado)
+        const dipSpeed = parseFloat(form.querySelector('#recipe-dip-speed').value) || 10; // mm/s
+        const dippingLength = parseFloat(form.querySelector('#recipe-dipping-length').value) || 50; // mm
+        
+        // Tiempo de bajar y subir por cada inmersión (2 movimientos)
+        const movementTimePerDipMs = dipSpeed > 0 ? (dippingLength / dipSpeed) * 2 * 1000 : 0;
+        
+        // Suma de tiempos por ciclo
+        const timePerCycleMs = (
+            dippingWait0 + dippingWait1 + dippingWait2 + dippingWait3 + 
+            (transferWait * 3) + // 3 transferencias entre vasos
+            (movementTimePerDipMs * 4) // 4 inmersiones por ciclo
+        );
+        
+        const totalTimeMs = timePerCycleMs * cycles;
+        const totalMinutes = Math.ceil(totalTimeMs / 60000);
+        
+        const durationInput = form.querySelector('#recipe-duration');
+        if (durationInput) {
+            durationInput.value = totalMinutes > 0 ? totalMinutes : 1;
+        }
     }
 
     /**
@@ -1120,8 +1203,8 @@ class RecipesScreen {
                                         </select>
                                     </div>
                                     <div class="col-md-6">
-                                        <label class="form-label">Duración (minutos)</label>
-                                        <input type="number" class="form-control" name="duration" id="recipe-duration" min="1" max="999">
+                                        <label class="form-label">Duración Estimada (minutos)</label>
+                                        <input type="number" class="form-control" name="duration" id="recipe-duration" readonly>
                                     </div>
                                     <div class="col-md-6">
                                         <label class="form-label">Temperatura (°C)</label>

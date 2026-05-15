@@ -21,6 +21,7 @@ class SilarApp {
             elapsedTime: 0,
             variables: {}
         };
+        this.activeScreenInstance = null; // Instancia de la pantalla activa
         
         // Check authentication first
         if (!this.checkAuthentication()) {
@@ -400,8 +401,19 @@ class SilarApp {
 
     handleArduinoData(data) {
         try {
-            // Parsear datos del Arduino
-            const parsed = JSON.parse(data);
+            // Parsear datos del Arduino si es un string, si no, usar el objeto directamente
+            let parsed;
+            if (typeof data === 'string') {
+                try {
+                    parsed = JSON.parse(data);
+                } catch (e) {
+                    console.log('Raw Arduino data (not JSON):', data);
+                    return;
+                }
+            } else {
+                parsed = data;
+            }
+
             this.processData.variables = { ...this.processData.variables, ...parsed };
             
             // Emitir evento para que las pantallas se actualicen
@@ -409,7 +421,7 @@ class SilarApp {
                 detail: parsed
             }));
         } catch (error) {
-            console.log('Raw Arduino data:', data);
+            console.error('Error procesando datos del Arduino:', error);
         }
     }
 
@@ -440,6 +452,13 @@ class SilarApp {
         this.showLoading();
         
         setTimeout(() => {
+            // Destruir instancia de pantalla anterior si existe
+            if (this.activeScreenInstance && typeof this.activeScreenInstance.destroy === 'function') {
+                console.log(`Destruyendo pantalla: ${this.currentScreen}`);
+                this.activeScreenInstance.destroy();
+                this.activeScreenInstance = null;
+            }
+
             this.currentScreen = screenName;
             this.updateBreadcrumb(screenName);
             this.loadScreen(screenName, params);
@@ -521,34 +540,34 @@ class SilarApp {
         switch (screenName) {
             case 'dashboard':
                 if (window.DashboardScreen) {
-                    new DashboardScreen(this);
+                    this.activeScreenInstance = new DashboardScreen(this);
                 } else {
                     console.error('DashboardScreen not available');
                 }
                 break;
             case 'recipes':
                 if (window.RecipesScreen) {
-                    new RecipesScreen(this);
+                    this.activeScreenInstance = new RecipesScreen(this);
                 }
                 break;
             case 'process':
                 if (window.ProcessScreen) {
-                    new ProcessScreen(this);
+                    this.activeScreenInstance = new ProcessScreen(this);
                 }
                 break;
             case 'monitoring':
                 if (window.MonitoringScreen) {
-                    new MonitoringScreen(this);
+                    this.activeScreenInstance = new MonitoringScreen(this);
                 }
                 break;
             case 'configuration':
                 if (window.ConfigurationScreen) {
-                    new ConfigurationScreen(this);
+                    this.activeScreenInstance = new ConfigurationScreen(this);
                 }
                 break;
             case 'manual':
                 if (window.ManualScreen) {
-                    new ManualScreen(this);
+                    this.activeScreenInstance = new ManualScreen(this);
                 }
                 break;
         }

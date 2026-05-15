@@ -10,29 +10,38 @@ class MonitoringScreen {
         this.variables = {};
         this.charts = {};
         this.updateInterval = null;
+
+        this.handleArduinoUpdate = this.handleArduinoUpdate.bind(this);
+
         this.init();
     }
 
     init() {
         this.bindEvents();
         this.startMonitoring();
-        
+
         // Listen for Arduino data updates
-        document.addEventListener('arduino-data-update', (e) => {
-            this.updateVariables(e.detail);
-        });
+        document.addEventListener('arduino-data-update', this.handleArduinoUpdate);
+    }
+
+    handleArduinoUpdate(e) {
+        this.updateVariables(e.detail);
+    }
+
+    destroy() {
+        if (this.updateInterval) {
+            clearInterval(this.updateInterval);
+            this.updateInterval = null;
+        }
+        document.removeEventListener('arduino-data-update', this.handleArduinoUpdate);
     }
 
     bindEvents() {
-        // Filter buttons
         document.querySelectorAll('.filter-btn').forEach(btn => {
             btn.addEventListener('click', (e) => {
-                const filter = e.target.getAttribute('data-filter');
-                this.filterVariables(filter);
-                
-                // Update active button
-                document.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));
-                e.target.classList.add('active');
+                const target = e.target.closest('.filter-btn');
+                const filter = target.getAttribute('data-filter');
+                this.switchTab(filter, target);
             });
         });
 
@@ -57,7 +66,7 @@ class MonitoringScreen {
     updateVariables(newData) {
         // Merge new data with existing variables
         this.variables = { ...this.variables, ...newData };
-        
+
         // Add timestamp if not present
         if (!this.variables.lastUpdate) {
             this.variables.lastUpdate = new Date().toISOString();
@@ -65,31 +74,31 @@ class MonitoringScreen {
     }
 
     updateDisplay() {
-        const variableCards = document.querySelectorAll('.variable-monitor-card');
-        
+        const variableCards = document.querySelectorAll('.variable-card-premium');
+
         variableCards.forEach(card => {
             const varName = card.getAttribute('data-variable');
             const valueElement = card.querySelector('.variable-value');
             const statusElement = card.querySelector('.variable-status');
-            
+
             if (this.variables[varName] !== undefined) {
                 const value = this.variables[varName];
                 const formattedValue = this.formatValue(value, varName);
-                
+
                 if (valueElement) {
                     valueElement.textContent = formattedValue;
                 }
-                
+
                 if (statusElement) {
                     statusElement.className = `variable-status ${this.getVariableStatus(varName, value)}`;
                 }
-                
+
                 // Add update animation
                 card.classList.add('updated');
                 setTimeout(() => card.classList.remove('updated'), 200);
             }
         });
-        
+
         // Update last update time
         const lastUpdateElement = document.getElementById('last-update-time');
         if (lastUpdateElement) {
@@ -101,7 +110,7 @@ class MonitoringScreen {
         if (typeof value === 'boolean') {
             return value ? 'Activo' : 'Inactivo';
         }
-        
+
         if (typeof value === 'number') {
             // Format based on variable type
             if (varName.includes('Temp') || varName.includes('temp')) {
@@ -122,10 +131,10 @@ class MonitoringScreen {
             if (varName.includes('cycles') || varName.includes('Count')) {
                 return `${Math.floor(value)}`;
             }
-            
+
             return value.toFixed(2);
         }
-        
+
         return String(value);
     }
 
@@ -137,42 +146,51 @@ class MonitoringScreen {
             }
             return value ? 'status-active' : 'status-inactive';
         }
-        
+
         if (typeof value === 'number') {
             // Temperature monitoring
             if (varName.includes('Temp') || varName.includes('temp')) {
                 if (value < 15 || value > 40) return 'status-warning';
                 return 'status-ok';
             }
-            
+
             // Humidity monitoring
             if (varName.includes('Humidity') || varName.includes('humidity')) {
                 if (value < 30 || value > 70) return 'status-warning';
                 return 'status-ok';
             }
-            
+
             // Speed monitoring
             if (varName.includes('Speed') || varName.includes('Velocity')) {
                 if (value < 10 || value > 200) return 'status-warning';
                 return 'status-ok';
             }
         }
-        
+
         return 'status-ok';
     }
 
-    filterVariables(filter) {
-        const cards = document.querySelectorAll('.variable-monitor-card');
-        
-        cards.forEach(card => {
-            const category = card.getAttribute('data-category');
-            
-            if (filter === 'all' || category === filter) {
-                card.style.display = 'block';
-            } else {
-                card.style.display = 'none';
-            }
-        });
+    switchTab(filter, btn) {
+        // Update active tab button
+        document.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));
+        btn.classList.add('active');
+
+        // Update visibility of cards with animation
+        const grid = document.getElementById('variables-grid');
+        grid.style.opacity = '0';
+
+        setTimeout(() => {
+            const cards = document.querySelectorAll('.variable-card-premium');
+            cards.forEach(card => {
+                const category = card.getAttribute('data-category');
+                if (filter === 'all' || category === filter) {
+                    card.closest('.col-card').style.display = 'block';
+                } else {
+                    card.closest('.col-card').style.display = 'none';
+                }
+            });
+            grid.style.opacity = '1';
+        }, 200);
     }
 
     async exportData() {
@@ -183,11 +201,11 @@ class MonitoringScreen {
                 systemStatus: this.app.systemStatus,
                 userSession: this.app.userSession?.username || 'unknown'
             };
-            
+
             const blob = new Blob([JSON.stringify(data, null, 2)], {
                 type: 'application/json'
             });
-            
+
             const url = URL.createObjectURL(blob);
             const a = document.createElement('a');
             a.href = url;
@@ -196,9 +214,9 @@ class MonitoringScreen {
             a.click();
             document.body.removeChild(a);
             URL.revokeObjectURL(url);
-            
+
             this.app.showSuccess('Datos exportados correctamente');
-            
+
         } catch (error) {
             this.app.showError('Error exportando los datos');
         }
@@ -210,10 +228,10 @@ class MonitoringScreen {
                 await this.app.apiCall('/process/emergency-stop', {
                     method: 'POST'
                 });
-                
+
                 this.app.sendArduinoCommand('EMERGENCY_STOP');
                 this.app.showSuccess('Parada de emergencia ejecutada');
-                
+
             } catch (error) {
                 this.app.showError('Error ejecutando parada de emergencia');
             }
@@ -251,89 +269,38 @@ class MonitoringScreen {
                             </button>
                         </div>
                     </div>
-                </div>
-
-                <!-- Status Summary -->
+                <!-- Tabbed Navigation -->
                 <div class="col-12 mb-4">
-                    <div class="card">
-                        <div class="card-body">
-                            <div class="row g-3">
-                                <div class="col-md-3">
-                                    <div class="d-flex align-items-center">
-                                        <div class="status-indicator status-running me-2"></div>
-                                        <div>
-                                            <div class="fw-bold">Sistema Activo</div>
-                                            <small class="text-muted">Estado operacional</small>
-                                        </div>
-                                    </div>
-                                </div>
-                                <div class="col-md-3">
-                                    <div class="d-flex align-items-center">
-                                        <i class="bi bi-clock text-primary me-2 fs-5"></i>
-                                        <div>
-                                            <div class="fw-bold" id="last-update-time">--:--:--</div>
-                                            <small class="text-muted">Última actualización</small>
-                                        </div>
-                                    </div>
-                                </div>
-                                <div class="col-md-3">
-                                    <div class="d-flex align-items-center">
-                                        <i class="bi bi-thermometer text-warning me-2 fs-5"></i>
-                                        <div>
-                                            <div class="fw-bold" id="env-temp-display">--°C</div>
-                                            <small class="text-muted">Temperatura ambiente</small>
-                                        </div>
-                                    </div>
-                                </div>
-                                <div class="col-md-3">
-                                    <div class="d-flex align-items-center">
-                                        <i class="bi bi-droplet text-info me-2 fs-5"></i>
-                                        <div>
-                                            <div class="fw-bold" id="env-humidity-display">--%</div>
-                                            <small class="text-muted">Humedad ambiente</small>
-                                        </div>
-                                    </div>
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-
-                <!-- Filter Buttons -->
-                <div class="col-12 mb-4">
-                    <div class="card">
-                        <div class="card-body">
-                            <h6 class="card-title mb-3">
-                                <i class="bi bi-funnel me-2"></i>Filtrar Variables
-                            </h6>
-                            <div class="btn-group" role="group">
-                                <button class="btn btn-outline-primary filter-btn active" data-filter="all">
-                                    <i class="bi bi-list-ul me-1"></i>Todas
-                                </button>
-                                <button class="btn btn-outline-primary filter-btn" data-filter="position">
-                                    <i class="bi bi-arrows-move me-1"></i>Posición
-                                </button>
-                                <button class="btn btn-outline-primary filter-btn" data-filter="speed">
-                                    <i class="bi bi-speedometer me-1"></i>Velocidad
-                                </button>
-                                <button class="btn btn-outline-primary filter-btn" data-filter="sensors">
-                                    <i class="bi bi-thermometer me-1"></i>Sensores
-                                </button>
-                                <button class="btn btn-outline-primary filter-btn" data-filter="process">
-                                    <i class="bi bi-gear me-1"></i>Proceso
-                                </button>
-                                <button class="btn btn-outline-primary filter-btn" data-filter="safety">
-                                    <i class="bi bi-shield me-1"></i>Seguridad
-                                </button>
-                            </div>
+                    <div class="monitoring-tabs-container">
+                        <div class="nav nav-pills custom-monitoring-tabs" id="monitoring-tabs">
+                            <button class="nav-link active filter-btn" data-filter="all">
+                                <i class="bi bi-grid-fill"></i><span>Todas</span>
+                            </button>
+                            <button class="nav-link filter-btn" data-filter="position">
+                                <i class="bi bi-arrows-move"></i><span>Posición</span>
+                            </button>
+                            <button class="nav-link filter-btn" data-filter="speed">
+                                <i class="bi bi-speedometer"></i><span>Velocidad</span>
+                            </button>
+                            <button class="nav-link filter-btn" data-filter="sensors">
+                                <i class="bi bi-thermometer-half"></i><span>Sensores</span>
+                            </button>
+                            <button class="nav-link filter-btn" data-filter="process">
+                                <i class="bi bi-cpu"></i><span>Proceso</span>
+                            </button>
+                            <button class="nav-link filter-btn" data-filter="safety">
+                                <i class="bi bi-shield-lock"></i><span>Seguridad</span>
+                            </button>
                         </div>
                     </div>
                 </div>
 
                 <!-- Variables Grid -->
                 <div class="col-12">
-                    <div class="row g-3" id="variables-grid">
-                        ${this.generateVariablesGrid()}
+                    <div class="monitoring-grid-wrapper">
+                        <div class="row g-3" id="variables-grid" style="transition: all 0.3s ease;">
+                            ${this.generateVariablesGrid()}
+                        </div>
                     </div>
                 </div>
             </div>
@@ -357,11 +324,10 @@ class MonitoringScreen {
             // Velocidades y Tiempo
             { name: 'transferSpeed', label: 'Velocidad Y', unit: 'rpm', category: 'speed', description: 'Velocidad Y cambio de posición' },
             { name: 'dipSpeed', label: 'Velocidad Z', unit: 'rpm', category: 'speed', description: 'Velocidad Z inmersión sustrato a solución' },
-            // Variables Pendiente (COMENTADAS - No implementadas aún)
-            // { name: 'setStir1', label: 'Velocidad Removedor 1', unit: 'rpm', category: 'speed', description: '*Pendiente* Velocidad del removedor en la parrilla 1' },
-            // { name: 'setStir2', label: 'Velocidad Removedor 2', unit: 'rpm', category: 'speed', description: '*Pendiente* Velocidad del removedor en la parrilla 2' },
-            // { name: 'setStir3', label: 'Velocidad Removedor 3', unit: 'rpm', category: 'speed', description: '*Pendiente* Velocidad del removedor en la parrilla 3' },
-            // { name: 'setStir4', label: 'Velocidad Removedor 4', unit: 'rpm', category: 'speed', description: '*Pendiente* Velocidad del removedor en la parrilla 4' },
+            { name: 'setStir1', label: 'Velocidad Removedor 1', unit: 'rpm', category: 'speed', description: 'Velocidad del removedor en la parrilla 1' },
+            { name: 'setStir2', label: 'Velocidad Removedor 2', unit: 'rpm', category: 'speed', description: 'Velocidad del removedor en la parrilla 2' },
+            { name: 'setStir3', label: 'Velocidad Removedor 3', unit: 'rpm', category: 'speed', description: 'Velocidad del removedor en la parrilla 3' },
+            { name: 'setStir4', label: 'Velocidad Removedor 4', unit: 'rpm', category: 'speed', description: 'Velocidad del removedor en la parrilla 4' },
 
             // Tiempos de Espera
             { name: 'dippingWait0', label: 'Tiempo Inmersión 1', unit: 'ms', category: 'process', description: 'Tiempo de inmersión 1' },
@@ -370,30 +336,22 @@ class MonitoringScreen {
             { name: 'dippingWait3', label: 'Tiempo Inmersión 4', unit: 'ms', category: 'process', description: 'Tiempo de inmersión 4' },
             { name: 'transferWait', label: 'Tiempo Espera Y', unit: 'ms', category: 'process', description: 'Tiempo de espera para cambio de posición en Y' },
 
-            // Sensores Ambientales
+            // Sensores Ambientales y de Parrilla
             { name: 'envTemp', label: 'Temperatura Ambiental', unit: '°C', category: 'sensors', description: 'Registro de temperatura ambiental' },
             { name: 'envHumidity', label: 'Humedad Ambiental', unit: '%', category: 'sensors', description: 'Registro de humedad ambiental' },
-            // Variables Pendiente (COMENTADAS - No implementadas aún)
-            // { name: 'setTemp1', label: 'Temperatura Parrilla 1', unit: '°C', category: 'sensors', description: '*Pendiente* Configurar temperatura deseada en la parrilla 1' },
-            // { name: 'setTemp2', label: 'Temperatura Parrilla 2', unit: '°C', category: 'sensors', description: '*Pendiente* Configurar temperatura deseada en la parrilla 2' },
-            // { name: 'setTemp3', label: 'Temperatura Parrilla 3', unit: '°C', category: 'sensors', description: '*Pendiente* Configurar temperatura deseada en la parrilla 3' },
-            // { name: 'setTemp4', label: 'Temperatura Parrilla 4', unit: '°C', category: 'sensors', description: '*Pendiente* Configurar temperatura deseada en la parrilla 4' },
-            // { name: 'setStirr1', label: 'Velocidad Removedor Parrilla 1', unit: 'rpm', category: 'sensors', description: '*Pendiente* Configurar la velocidad del removedor en la parrilla 1' },
-            // { name: 'setStirr2', label: 'Velocidad Removedor Parrilla 2', unit: 'rpm', category: 'sensors', description: '*Pendiente* Configurar la velocidad del removedor en la parrilla 2' },
-            // { name: 'setStirr3', label: 'Velocidad Removedor Parrilla 3', unit: 'rpm', category: 'sensors', description: '*Pendiente* Configurar la velocidad del removedor en la parrilla 3' },
-            // { name: 'setStirr4', label: 'Velocidad Removedor Parrilla 4', unit: 'rpm', category: 'sensors', description: '*Pendiente* Configurar la velocidad del removedor en la parrilla 4' },
-            // { name: 'measTemp1', label: 'Lectura Temp. Sol. 1', unit: '°C', category: 'sensors', description: '*Pendiente* Lectura de temperatura de la solución 1' },
-            // { name: 'measTemp2', label: 'Lectura Temp. Sol. 2', unit: '°C', category: 'sensors', description: '*Pendiente* Lectura de temperatura de la solución 2' },
-            // { name: 'measTemp3', label: 'Lectura Temp. Sol. 3', unit: '°C', category: 'sensors', description: '*Pendiente* Lectura de temperatura de la solución 3' },
-            // { name: 'measTemp4', label: 'Lectura Temp. Sol. 4', unit: '°C', category: 'sensors', description: '*Pendiente* Lectura de temperatura de la solución 4' },
+            { name: 'setTemp1', label: 'Temperatura Parrilla 1', unit: '°C', category: 'sensors', description: 'Configurar temperatura deseada en la parrilla 1' },
+            { name: 'setTemp2', label: 'Temperatura Parrilla 2', unit: '°C', category: 'sensors', description: 'Configurar temperatura deseada en la parrilla 2' },
+            { name: 'setTemp3', label: 'Temperatura Parrilla 3', unit: '°C', category: 'sensors', description: 'Configurar temperatura deseada en la parrilla 3' },
+            { name: 'setTemp4', label: 'Temperatura Parrilla 4', unit: '°C', category: 'sensors', description: 'Configurar temperatura deseada en la parrilla 4' },
+            { name: 'measTemp1', label: 'Lectura Temp. Sol. 1', unit: '°C', category: 'sensors', description: 'Lectura de temperatura de la solución 1' },
+            { name: 'measTemp2', label: 'Lectura Temp. Sol. 2', unit: '°C', category: 'sensors', description: 'Lectura de temperatura de la solución 2' },
+            { name: 'measTemp3', label: 'Lectura Temp. Sol. 3', unit: '°C', category: 'sensors', description: 'Lectura de temperatura de la solución 3' },
+            { name: 'measTemp4', label: 'Lectura Temp. Sol. 4', unit: '°C', category: 'sensors', description: 'Lectura de temperatura de la solución 4' },
 
             // Control de Proceso
             { name: 'cycles', label: 'Ciclos Restantes', unit: '', category: 'process', description: 'Cantidad de ciclos por prueba' },
             { name: 'cycleCount', label: 'Contador Ciclos', unit: '', category: 'process', description: 'Contador de ciclos durante la prueba' },
             { name: 'timeStamp', label: 'Tiempo Global', unit: 'ms', category: 'process', description: 'Registro de tiempo global en el sistema' },
-            { name: 'userId', label: 'ID Usuario', unit: '', category: 'process', description: 'Código de identificación de usuario utilizado para reactivar la información generada en el equipo durante su sesión' },
-
-            // Estado de Ventilador y Excepciones
             { name: 'fan', label: 'Ventilador', unit: '', category: 'process', description: 'Ventilador encendido/apagado' },
             { name: 'exceptDripping1', label: 'Excluir Inmersión Y1', unit: '', category: 'process', description: 'Excluir inmersión en Y1' },
             { name: 'exceptDripping2', label: 'Excluir Inmersión Y2', unit: '', category: 'process', description: 'Excluir inmersión en Y2' },
@@ -409,29 +367,48 @@ class MonitoringScreen {
             { name: 'pardEmergencia', label: 'Parada Emergencia', unit: '', category: 'safety', description: 'Botón físico para detener el sistema en caso de emergencia' },
 
             // Control de Ciclos
-            { name: 'pauseCycle', label: 'Pausar Ciclo', unit: '', category: 'process', description: 'Botón en la UI para pausar el ciclo. Se puede reiniciar donde se quedó' },
+            { name: 'pauseCycle', label: 'Pausar Ciclo', unit: '', category: 'process', description: 'Botón en la UI para pausar el ciclo' },
             { name: 'restartCycle', label: 'Reiniciar Ciclo', unit: '', category: 'process', description: 'Botón en la UI para reiniciar el ciclo después de una pausa' }
         ];
 
         return variables.map(variable => `
-            <div class="col-lg-3 col-md-4 col-sm-6">
-                <div class="variable-monitor-card card" data-variable="${variable.name}" data-category="${variable.category}">
+            <div class="col-xl-3 col-lg-4 col-md-6 col-card">
+                <div class="variable-card-premium card h-100" data-variable="${variable.name}" data-category="${variable.category}">
                     <div class="card-body p-3">
-                        <div class="d-flex justify-content-between align-items-start mb-2">
-                            <div class="variable-status status-ok"></div>
-                            <span class="badge bg-light text-dark">${variable.category}</span>
+                        <div class="d-flex justify-content-between align-items-center mb-3">
+                            <div class="category-tag">
+                                <i class="bi ${MonitoringScreen.getCategoryIcon(variable.category)}"></i>
+                                <span>${variable.category}</span>
+                            </div>
+                            <div class="status-dot status-ok"></div>
                         </div>
-                        <h6 class="card-title text-truncate mb-1" title="${variable.label}">
-                            ${variable.label}
-                        </h6>
-                        <div class="variable-value h5 mb-1 text-primary">--</div>
-                        <small class="text-muted d-block text-truncate" title="${variable.description}">
-                            ${variable.description}
-                        </small>
+                        
+                        <div class="variable-info">
+                            <h6 class="variable-label" title="${variable.description}">${variable.label}</h6>
+                            <div class="variable-value-container">
+                                <span class="variable-value">--</span>
+                                <span class="variable-unit">${variable.unit || ''}</span>
+                            </div>
+                        </div>
+                        
+                        <div class="variable-footer">
+                            <p class="variable-desc">${variable.description}</p>
+                        </div>
                     </div>
                 </div>
             </div>
         `).join('');
+    }
+
+    static getCategoryIcon(category) {
+        const icons = {
+            'position': 'bi-arrows-move',
+            'speed': 'bi-speedometer',
+            'sensors': 'bi-thermometer-half',
+            'process': 'bi-cpu',
+            'safety': 'bi-shield-lock'
+        };
+        return icons[category] || 'bi-gear';
     }
 }
 

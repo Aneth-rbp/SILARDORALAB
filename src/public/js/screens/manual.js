@@ -7,7 +7,22 @@ class ManualScreen {
     constructor(app) {
         this.app = app;
         this.arduinoState = null;
+        
+        // Binds
+        this.onArduinoState = this.onArduinoState.bind(this);
+        this.onArduinoData = this.onArduinoData.bind(this);
+        this.onArduinoError = this.onArduinoError.bind(this);
+        
         this.init();
+    }
+
+    destroy() {
+        console.log('ManualScreen destroyed');
+        if (this.app.socket) {
+            this.app.socket.off('arduino-state', this.onArduinoState);
+            this.app.socket.off('arduino-data', this.onArduinoData);
+            this.app.socket.off('arduino-error', this.onArduinoError);
+        }
     }
 
     init() {
@@ -40,18 +55,18 @@ class ManualScreen {
 
         // Movimientos Eje Y
         document.getElementById('btn-y-forward')?.addEventListener('click', () => {
-            this.moveY(5000);
+            this.moveY(10000);
         });
         document.getElementById('btn-y-backward')?.addEventListener('click', () => {
-            this.moveY(-5000);
+            this.moveY(-10000);
         });
 
         // Movimientos Eje Z
         document.getElementById('btn-z-up')?.addEventListener('click', () => {
-            this.moveZ(5000);
+            this.moveZ(10000);
         });
         document.getElementById('btn-z-down')?.addEventListener('click', () => {
-            this.moveZ(-5000);
+            this.moveZ(-10000);
         });
 
         // Paro de Emergencia
@@ -64,20 +79,26 @@ class ManualScreen {
         if (!this.app.socket) return;
 
         // Escuchar estado del Arduino
-        this.app.socket.on('arduino-state', (state) => {
-            this.arduinoState = state;
-            this.updateStateDisplay();
-        });
+        this.app.socket.on('arduino-state', this.onArduinoState);
 
         // Escuchar datos del Arduino
-        this.app.socket.on('arduino-data', (data) => {
-            this.handleArduinoData(data);
-        });
+        this.app.socket.on('arduino-data', this.onArduinoData);
 
         // Escuchar errores
-        this.app.socket.on('arduino-error', (error) => {
-            this.app.showError(`Error Arduino: ${error.error || error.message}`);
-        });
+        this.app.socket.on('arduino-error', this.onArduinoError);
+    }
+
+    onArduinoState(state) {
+        this.arduinoState = state;
+        this.updateStateDisplay();
+    }
+
+    onArduinoData(data) {
+        this.handleArduinoData(data);
+    }
+
+    onArduinoError(error) {
+        this.app.showError(`Error Arduino: ${error.error || error.message}`);
     }
 
     handleArduinoData(data) {
@@ -183,55 +204,33 @@ class ManualScreen {
 
     static getTemplate() {
         return `
-            <div class="row">
-                <div class="col-12 mb-4">
-                    <h3 class="mb-1">
+            <div class="row g-3">
+                <div class="col-12 mb-1">
+                    <h4 class="mb-1 fw-bold">
                         <i class="bi bi-joystick me-2 text-primary"></i>
                         Control Manual
-                    </h3>
-                    <p class="text-muted mb-0">Operación manual de componentes del sistema SILAR</p>
+                    </h4>
                 </div>
 
-                <!-- Estado del Arduino -->
-                <div class="col-12 mb-3">
-                    <div class="card">
-                        <div class="card-body">
-                            <div class="row align-items-center">
-                                <div class="col-md-4">
-                                    <small class="text-muted">Estado Conexión</small><br>
-                                    <span class="badge bg-secondary" id="arduino-connection-status">Verificando...</span>
-                                </div>
-                                <div class="col-md-4">
-                                    <small class="text-muted">Modo Actual</small><br>
-                                    <strong id="arduino-mode-status">-</strong>
-                                </div>
-                                <div class="col-md-4">
-                                    <small class="text-muted">Posiciones</small><br>
-                                    Y: <span id="axis-y-position">0</span> | Z: <span id="axis-z-position">0</span>
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-                </div>
 
                 <!-- Controles de Modo -->
-                <div class="col-md-6 mb-3">
-                    <div class="card">
-                        <div class="card-header">
-                            <h6 class="mb-0"><i class="bi bi-gear me-2"></i>Modo de Operación</h6>
+                <div class="col-md-6">
+                    <div class="card shadow-sm border-0">
+                        <div class="card-header bg-primary text-white py-2">
+                            <h6 class="mb-0 small fw-bold"><i class="bi bi-gear me-2"></i>Modo de Operación</h6>
                         </div>
-                        <div class="card-body">
-                            <div class="row g-3">
+                        <div class="card-body p-3">
+                            <div class="row g-2">
                                 <div class="col-6">
                                     <button class="btn btn-outline-primary w-100 py-3" id="btn-mode-manual">
-                                        <i class="bi bi-hand-index d-block fs-2 mb-2"></i>
-                                        Modo Manual
+                                        <i class="bi bi-hand-index d-block fs-3 mb-2"></i>
+                                        <span class="fw-bold">Modo Manual</span>
                                     </button>
                                 </div>
                                 <div class="col-6">
                                     <button class="btn btn-outline-success w-100 py-3" id="btn-mode-automatic">
-                                        <i class="bi bi-cpu d-block fs-2 mb-2"></i>
-                                        Modo Automático
+                                        <i class="bi bi-cpu d-block fs-3 mb-2"></i>
+                                        <span class="fw-bold">Modo Automático</span>
                                     </button>
                                 </div>
                             </div>
@@ -240,71 +239,65 @@ class ManualScreen {
                 </div>
 
                 <!-- HOME -->
-                <div class="col-md-6 mb-3">
-                    <div class="card">
-                        <div class="card-header">
-                            <h6 class="mb-0"><i class="bi bi-house me-2"></i>Posición Inicial</h6>
+                <div class="col-md-6">
+                    <div class="card shadow-sm border-0">
+                        <div class="card-header bg-primary text-white py-2">
+                            <h6 class="mb-0 small fw-bold"><i class="bi bi-house me-2"></i>Posición Inicial</h6>
                         </div>
-                        <div class="card-body">
+                        <div class="card-body p-3">
                             <button class="btn btn-warning w-100 py-3" id="btn-home">
-                                <i class="bi bi-house-door d-block fs-2 mb-2"></i>
-                                Ejecutar HOME
+                                <i class="bi bi-house-door d-block fs-3 mb-2"></i>
+                                <span class="fw-bold">Ejecutar HOME</span>
                             </button>
                         </div>
                     </div>
                 </div>
 
                 <!-- Control Eje Y -->
-                <div class="col-md-6 mb-3">
-                    <div class="card">
-                        <div class="card-header">
-                            <h6 class="mb-0"><i class="bi bi-arrows-vertical me-2"></i>Control Eje Y</h6>
+                <div class="col-md-6">
+                    <div class="card shadow-sm border-0">
+                        <div class="card-header bg-primary text-white py-2">
+                            <h6 class="mb-0 small fw-bold"><i class="bi bi-arrows-vertical me-2"></i>Control Eje Y</h6>
                         </div>
-                        <div class="card-body">
-                            <div class="row g-3">
+                        <div class="card-body p-3">
+                            <div class="row g-2">
                                 <div class="col-6">
-                                    <button class="btn btn-primary btn-lg w-100" id="btn-y-forward">
+                                    <button class="btn btn-primary w-100 py-3" id="btn-y-forward">
                                         <i class="bi bi-arrow-up-circle fs-3 d-block mb-2"></i>
-                                        Y+ (Adelante)
+                                        <span class="fw-bold">Y+ (Adelante)</span>
                                     </button>
                                 </div>
                                 <div class="col-6">
-                                    <button class="btn btn-primary btn-lg w-100" id="btn-y-backward">
+                                    <button class="btn btn-primary w-100 py-3" id="btn-y-backward">
                                         <i class="bi bi-arrow-down-circle fs-3 d-block mb-2"></i>
-                                        Y- (Atrás)
+                                        <span class="fw-bold">Y- (Atrás)</span>
                                     </button>
                                 </div>
-                            </div>
-                            <div class="mt-3 text-center">
-                                <small class="text-muted">Posición Actual: <strong id="axis-y-position-display">0</strong> pasos</small>
                             </div>
                         </div>
                     </div>
                 </div>
 
                 <!-- Control Eje Z -->
-                <div class="col-md-6 mb-3">
-                    <div class="card">
-                        <div class="card-header">
-                            <h6 class="mb-0"><i class="bi bi-arrows-vertical me-2"></i>Control Eje Z</h6>
+                <div class="col-md-6">
+                    <div class="card shadow-sm border-0">
+                        <div class="card-header bg-primary text-white py-2">
+                            <h6 class="mb-0 small fw-bold"><i class="bi bi-arrows-vertical me-2"></i>Control Eje Z</h6>
                         </div>
-                        <div class="card-body">
-                            <div class="row g-3">
+                        <div class="card-body p-3">
+                            <div class="row g-2">
                                 <div class="col-6">
-                                    <button class="btn btn-success btn-lg w-100" id="btn-z-up">
+                                    <button class="btn btn-success w-100 py-3" id="btn-z-up">
                                         <i class="bi bi-arrow-up-circle fs-3 d-block mb-2"></i>
-                                        Z+ (Arriba)
+                                        <span class="fw-bold">Z+ (Arriba)</span>
                                     </button>
                                 </div>
                                 <div class="col-6">
-                                    <button class="btn btn-success btn-lg w-100" id="btn-z-down">
+                                    <button class="btn btn-success w-100 py-3" id="btn-z-down">
                                         <i class="bi bi-arrow-down-circle fs-3 d-block mb-2"></i>
-                                        Z- (Abajo)
+                                        <span class="fw-bold">Z- (Abajo)</span>
                                     </button>
                                 </div>
-                            </div>
-                            <div class="mt-3 text-center">
-                                <small class="text-muted">Posición Actual: <strong id="axis-z-position-display">0</strong> pasos</small>
                             </div>
                         </div>
                     </div>
@@ -312,18 +305,15 @@ class ManualScreen {
 
                 <!-- Paro de Emergencia -->
                 <div class="col-12">
-                    <div class="card border-danger">
-                        <div class="card-header bg-danger text-white">
-                            <h6 class="mb-0"><i class="bi bi-exclamation-triangle me-2"></i>Emergencia</h6>
+                    <div class="card border-danger shadow-sm">
+                        <div class="card-header bg-danger text-white py-2">
+                            <h6 class="mb-0 small fw-bold text-center"><i class="bi bi-exclamation-triangle me-2"></i>Emergencia</h6>
                         </div>
-                        <div class="card-body text-center">
-                            <button class="btn btn-danger btn-lg px-5 py-3" id="btn-emergency-stop">
-                                <i class="bi bi-stop-circle fs-2 d-block mb-2"></i>
-                                PARO DE EMERGENCIA
+                        <div class="card-body p-3 text-center">
+                            <button class="btn btn-danger w-100 py-3" id="btn-emergency-stop">
+                                <i class="bi bi-stop-circle fs-3 me-2"></i>
+                                <span class="fw-bold fs-5">PARO DE EMERGENCIA</span>
                             </button>
-                            <small class="d-block mt-2 text-muted">
-                                Detiene todos los movimientos inmediatamente
-                            </small>
                         </div>
                     </div>
                 </div>

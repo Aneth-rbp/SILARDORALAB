@@ -26,7 +26,8 @@ class SilarWebServer {
     this.io = null;
     this.dbConnection = null;
     this.arduinoController = getInstance();
-    this.isReconnecting = false; // Bandera para evitar reconexiones múltiples
+    this.isReconnecting = false;
+    this.systemConfigCache = {};
     this.setupExpress();
   }
 
@@ -166,6 +167,12 @@ class SilarWebServer {
     app.get('/api/config', this.authenticateToken.bind(this), this.getSystemConfig.bind(this));
     app.put('/api/config', this.authenticateToken.bind(this), this.updateSystemConfig.bind(this));
 
+    // Rutas API Usuarios (solo admin)
+    app.get('/api/users', this.authenticateToken.bind(this), this.getUsers.bind(this));
+    app.post('/api/users', this.authenticateToken.bind(this), this.createUser.bind(this));
+    app.put('/api/users/:id', this.authenticateToken.bind(this), this.updateUser.bind(this));
+    app.delete('/api/users/:id', this.authenticateToken.bind(this), this.deleteUser.bind(this));
+
     // Ruta pública para leer límites del sistema (todos los usuarios autenticados)
     app.get('/api/config/limits', this.authenticateToken.bind(this), this.getSystemLimits.bind(this));
 
@@ -258,8 +265,18 @@ class SilarWebServer {
   setupArduinoEventForwarding() {
     // Datos parseados del Arduino
     this.arduinoController.on('data', (parsed) => {
+      // APLICAR OFFSETS DE SENSORES SI EXISTEN
+      if (parsed.type === 'sensors') {
+        if (parsed.envTemp !== undefined && this.systemConfigCache.temperature_offset) {
+          parsed.envTemp += parseFloat(this.systemConfigCache.temperature_offset);
+        }
+        if (parsed.envHumidity !== undefined && this.systemConfigCache.humidity_offset) {
+          parsed.envHumidity += parseFloat(this.systemConfigCache.humidity_offset);
+        }
+      }
+
       this.io.emit('arduino-data', parsed);
-      logger.debug('Arduino data broadcast', { type: parsed.type });
+      logger.debug('Arduino data broadcast with offsets applied', { type: parsed.type });
     });
 
     // Cambios de estado
@@ -414,7 +431,7 @@ class SilarWebServer {
       // Buscar usuario en la base de datos
       console.log('🔍 Buscando usuario en BD:', username);
       const [rows] = await this.dbConnection.execute(
-        'SELECT id, username, password, full_name, role, email, is_active FROM users WHERE username = ? AND is_active = 1',
+        'SELECT id, username, password, full_name, role, is_active FROM users WHERE username = ? AND is_active = 1',
         [username]
       );
 
@@ -469,8 +486,7 @@ class SilarWebServer {
           id: user.id,
           username: user.username,
           full_name: user.full_name,
-          role: user.role,
-          email: user.email
+          role: user.role
         },
         token: token
       });
@@ -1820,6 +1836,143 @@ class SilarWebServer {
         success: false,
         error: error.message
       });
+    }
+  }
+
+  /**
+   * Obtiene la lista de todos los usuarios activos
+   * Solo para administradores
+   */
+  async getUsers(req, res) {
+    try {
+      if (req.user.role !== 'admin') {
+        return res.status(403).json({ success: false, message: 'Acceso denegado' });
+      }
+
+      await this.ensureDatabaseConnection();
+      const [rows] = await this.dbConnection.execute(
+        'SELECT id, username, full_name, role, created_at, last_login FROM users WHERE is_active = 1 ORDER BY id ASC'
+      );
+
+      res.json({ success: true, users: rows });
+    } catch (error) {
+      logger.apiError('GET', '/api/users', error, req.user?.id);
+      res.status(500).json({ success: false, error: error.message });
+    }
+  }
+
+  /**
+   * Crea un nuevo usuario
+   * Solo para administradores
+   */
+  async createUser(req, res) {
+    try {
+      if (req.user.role !== 'admin') {
+        return res.status(403).json({ success: false, message: 'Acceso denegado' });
+      }
+
+      const { username, password, full_name, role } = req.body;
+
+      if (!username || !password || !role) {
+        return res.status(400).json({ success: false, message: 'Faltan campos obligatorios' });
+      }
+
+      await this.ensureDatabaseConnection();
+
+      // Verificar si el usuario ya existe (incluyendo inactivos para evitar conflictos de username)
+      const [existing] = await this.dbConnection.execute(
+        'SELECT id FROM users WHERE username = ?',
+        [username]
+      );
+
+      if (existing.length > 0) {
+        return res.status(400).json({ success: false, message: 'El nombre de usuario ya está en uso' });
+      }
+
+      const crypto = require('crypto');
+      const hashedPassword = crypto.createHash('md5').update(password).digest('hex');
+
+      await this.dbConnection.execute(
+        'INSERT INTO users (username, password, full_name, role, is_active, created_at) VALUES (?, ?, ?, ?, 1, NOW())',
+        [username, hashedPassword, full_name || '', role]
+      );
+
+      logger.info(`Usuario creado por admin ${req.user.username}`, { newUser: username });
+      res.json({ success: true, message: 'Usuario creado correctamente' });
+    } catch (error) {
+      logger.apiError('POST', '/api/users', error, req.user?.id);
+      res.status(500).json({ success: false, error: error.message });
+    }
+  }
+
+  /**
+   * Actualiza un usuario existente
+   * Solo para administradores
+   */
+  async updateUser(req, res) {
+    try {
+      if (req.user.role !== 'admin') {
+        return res.status(403).json({ success: false, message: 'Acceso denegado' });
+      }
+
+      const { id } = req.params;
+      const { full_name, role, password } = req.body;
+
+      await this.ensureDatabaseConnection();
+
+      let query = 'UPDATE users SET full_name = ?, role = ?';
+      let params = [full_name, role];
+
+      if (password && password.trim() !== '') {
+        const crypto = require('crypto');
+        const hashedPassword = crypto.createHash('md5').update(password).digest('hex');
+        query += ', password = ?';
+        params.push(hashedPassword);
+      }
+
+      query += ' WHERE id = ?';
+      params.push(id);
+
+      await this.dbConnection.execute(query, params);
+
+      logger.info(`Usuario ID ${id} actualizado por admin ${req.user.username}`);
+      res.json({ success: true, message: 'Usuario actualizado correctamente' });
+    } catch (error) {
+      logger.apiError('PUT', '/api/users', error, req.user?.id);
+      res.status(500).json({ success: false, error: error.message });
+    }
+  }
+
+  /**
+   * Desactiva un usuario (Soft Delete)
+   * Solo para administradores. No permite auto-eliminación.
+   */
+  async deleteUser(req, res) {
+    try {
+      if (req.user.role !== 'admin') {
+        return res.status(403).json({ success: false, message: 'Acceso denegado' });
+      }
+
+      const { id } = req.params;
+
+      // Regla: No se pueden eliminar a sí mismos
+      if (parseInt(id) === parseInt(req.user.id)) {
+        return res.status(400).json({ success: false, message: 'No puedes eliminar tu propia cuenta' });
+      }
+
+      await this.ensureDatabaseConnection();
+
+      // Soft delete: is_active = 0
+      await this.dbConnection.execute(
+        'UPDATE users SET is_active = 0 WHERE id = ?',
+        [id]
+      );
+
+      logger.info(`Usuario ID ${id} desactivado (soft delete) por admin ${req.user.username}`);
+      res.json({ success: true, message: 'Usuario eliminado correctamente' });
+    } catch (error) {
+      logger.apiError('DELETE', '/api/users', error, req.user?.id);
+      res.status(500).json({ success: false, error: error.message });
     }
   }
 
