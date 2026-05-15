@@ -200,8 +200,14 @@ class SilarApp {
     }
 
     logout() {
-        // Mostrar modal de confirmación
-        const logoutModal = new bootstrap.Modal(document.getElementById('logoutModal'));
+        // Obtener o crear la instancia del modal (Singleton)
+        let modalElement = document.getElementById('logoutModal');
+        let logoutModal = bootstrap.Modal.getInstance(modalElement);
+        
+        if (!logoutModal) {
+            logoutModal = new bootstrap.Modal(modalElement);
+        }
+        
         logoutModal.show();
     }
 

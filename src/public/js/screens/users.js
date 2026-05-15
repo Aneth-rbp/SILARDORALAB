@@ -49,7 +49,10 @@ class UsersScreen {
             <div class="container-fluid py-4">
                 <div class="d-flex justify-content-between align-items-center mb-4">
                     <div>
-                        <h2 class="mb-1">Administración de Usuarios</h2>
+                        <h2 class="mb-1">
+                            <i class="bi bi-people-fill me-2 text-primary"></i>
+                            Administración de Usuarios
+                        </h2>
                         <p class="text-muted">Gestione los accesos y permisos del sistema</p>
                     </div>
                     <button class="btn btn-primary" onclick="window.usersScreen.showUserModal()">
