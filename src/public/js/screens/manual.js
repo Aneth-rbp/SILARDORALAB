@@ -55,18 +55,18 @@ class ManualScreen {
 
         // Movimientos Eje Y
         document.getElementById('btn-y-forward')?.addEventListener('click', () => {
-            this.moveY(10000);
+            this.moveY(2500);
         });
         document.getElementById('btn-y-backward')?.addEventListener('click', () => {
-            this.moveY(-10000);
+            this.moveY(-2500);
         });
 
         // Movimientos Eje Z
         document.getElementById('btn-z-up')?.addEventListener('click', () => {
-            this.moveZ(10000);
+            this.moveZ(2500);
         });
         document.getElementById('btn-z-down')?.addEventListener('click', () => {
-            this.moveZ(-10000);
+            this.moveZ(-2500);
         });
 
         // Paro de Emergencia

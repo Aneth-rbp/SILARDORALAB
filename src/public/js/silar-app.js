@@ -205,7 +205,7 @@ class SilarApp {
         let logoutModal = bootstrap.Modal.getInstance(modalElement);
         
         if (!logoutModal) {
-            logoutModal = new bootstrap.Modal(modalElement);
+            logoutModal = new bootstrap.Modal(modalElement, { focus: false });
         }
         
         logoutModal.show();
@@ -284,7 +284,7 @@ class SilarApp {
 
             this.socket.on('arduino-error', (error) => {
                 console.error('❌ Error de Arduino vía WebSocket:', error);
-                this.updateSystemStatus({ arduino: false });
+                // No cambiar el estado a desconectado por errores de comando o límites
             });
 
             this.socket.on('process-update', (data) => {

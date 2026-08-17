@@ -277,6 +277,17 @@ class SilarWebServer {
 
       this.io.emit('arduino-data', parsed);
       logger.debug('Arduino data broadcast with offsets applied', { type: parsed.type });
+
+      // Sincronizar estado del proceso en la base de datos basado en mensajes de control del Arduino
+      if (parsed.type === 'message' && parsed.raw) {
+        if (parsed.raw.startsWith('PROCESO_COMPLETADO')) {
+          this.markProcessState('completed');
+        } else if (parsed.raw.startsWith('PROCESO_DETENIDO') || parsed.raw.startsWith('PROCESO_ABORTADO')) {
+          this.markProcessState('cancelled', 'Detenido por Arduino');
+        } else if (parsed.raw.startsWith('PROCESO_PAUSADO')) {
+          this.markProcessState('paused');
+        }
+      }
     });
 
     // Cambios de estado
@@ -301,6 +312,44 @@ class SilarWebServer {
       this.io.emit('arduino-error', error);
       logger.error('Arduino error broadcast', error);
     });
+  }
+
+  async markProcessState(newState, reason = null) {
+    try {
+      if (!this.dbConnection) return;
+      await this.ensureDatabaseConnection();
+      
+      const [runningProcesses] = await this.dbConnection.execute(
+        `SELECT id, start_time FROM processes WHERE status IN ('running', 'paused') ORDER BY start_time DESC LIMIT 1`
+      );
+      
+      if (runningProcesses.length > 0) {
+        const process = runningProcesses[0];
+        
+        if (newState === 'completed' || newState === 'cancelled') {
+          const durationMinutes = process.start_time
+            ? Math.max(1, Math.floor((Date.now() - new Date(process.start_time).getTime()) / 60000))
+            : 0;
+            
+          await this.dbConnection.execute(
+            `UPDATE processes SET status = ?, end_time = NOW(), duration_minutes = ?, error_message = ? WHERE id = ?`,
+            [newState, durationMinutes, reason, process.id]
+          );
+        } else if (newState === 'paused') {
+          await this.dbConnection.execute(
+            `UPDATE processes SET status = ? WHERE id = ?`,
+            [newState, process.id]
+          );
+        }
+        
+        logger.info(`Proceso ${process.id} marcado como ${newState} en la base de datos automáticamente.`);
+        
+        // Notificar a los clientes WebSocket
+        this.io.emit('process-status-update', { status: newState, processId: process.id });
+      }
+    } catch (error) {
+      logger.error(`Error al marcar proceso como ${newState}:`, error);
+    }
   }
 
   async initDatabase() {
@@ -1211,6 +1260,7 @@ class SilarWebServer {
         return res.json({
           success: true,
           status: 'stopped',
+          serverTime: new Date().toISOString(),
           process: null
         });
       }
@@ -1219,6 +1269,7 @@ class SilarWebServer {
       return res.json({
         success: true,
         status: process.status,
+        serverTime: new Date().toISOString(),
         process: {
           id: process.id,
           recipeId: process.recipe_id,

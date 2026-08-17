@@ -373,12 +373,14 @@ class ArduinoController extends EventEmitter {
                 this.currentState.axisY.atLimit = parsed.limitMaxY || this.currentState.axisY.limitMin;
             }
             if (parsed.limitMinZ !== undefined) {
-                this.currentState.axisZ.limitMin = parsed.limitMinZ;
-                this.currentState.axisZ.atLimit = parsed.limitMinZ || this.currentState.axisZ.limitMax;
+                // Pin 14 (TOP/Home) -> limitMax in JS (blocks steps > 0 / UP)
+                this.currentState.axisZ.limitMax = parsed.limitMinZ;
+                this.currentState.axisZ.atLimit = parsed.limitMinZ || this.currentState.axisZ.limitMin;
             }
             if (parsed.limitMaxZ !== undefined) {
-                this.currentState.axisZ.limitMax = parsed.limitMaxZ;
-                this.currentState.axisZ.atLimit = parsed.limitMaxZ || this.currentState.axisZ.limitMin;
+                // Pin 15 (BOTTOM) -> limitMin in JS (blocks steps < 0 / DOWN)
+                this.currentState.axisZ.limitMin = parsed.limitMaxZ;
+                this.currentState.axisZ.atLimit = parsed.limitMaxZ || this.currentState.axisZ.limitMax;
             }
         }
 

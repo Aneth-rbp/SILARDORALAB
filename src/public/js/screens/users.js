@@ -14,6 +14,14 @@ class UsersScreen {
         this.init();
     }
 
+    destroy() {
+        console.log('UsersScreen destroyed');
+        const modalElement = document.getElementById('userModal');
+        if (modalElement) {
+            modalElement.remove();
+        }
+    }
+
     async init() {
         if (this.currentUser.role !== 'admin') {
             this.app.showError('Acceso denegado: Solo administradores');
@@ -183,7 +191,20 @@ class UsersScreen {
     }
 
     showUserModal(user = null) {
-        const modal = new bootstrap.Modal(document.getElementById('userModal'));
+        const modalElement = document.getElementById('userModal');
+        if (modalElement && modalElement.parentNode !== document.body) {
+            // Eliminar cualquier modal viejo en el body antes de mover el nuevo
+            const oldModal = document.querySelector('body > #userModal');
+            if (oldModal && oldModal !== modalElement) {
+                oldModal.remove();
+            }
+            document.body.appendChild(modalElement);
+        }
+
+        let modal = bootstrap.Modal.getInstance(modalElement);
+        if (!modal) {
+            modal = new bootstrap.Modal(modalElement, { focus: false });
+        }
         const form = document.getElementById('userForm');
         const passHelp = document.getElementById('passHelp');
         const passLabel = document.getElementById('passLabel');

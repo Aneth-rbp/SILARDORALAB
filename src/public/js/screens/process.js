@@ -17,11 +17,30 @@ class ProcessScreen {
     destroy() {
         console.log('ProcessScreen destroyed');
         this.forceStopTimer();
+        this.stopStatusPolling();
     }
 
     init() {
         this.bindEvents();
         this.loadProcessStatus();
+        this.startStatusPolling();
+    }
+
+    startStatusPolling() {
+        this.stopStatusPolling();
+        this.statusPollInterval = setInterval(() => {
+            const terminalStates = ['stopped', 'completed', 'cancelled', 'failed', 'error'];
+            if (!terminalStates.includes(this.currentStatus)) {
+                this.loadProcessStatus();
+            }
+        }, 3000);
+    }
+
+    stopStatusPolling() {
+        if (this.statusPollInterval) {
+            clearInterval(this.statusPollInterval);
+            this.statusPollInterval = null;
+        }
     }
 
     async loadProcessStatus() {
@@ -33,27 +52,43 @@ class ProcessScreen {
             if (result && result.success) {
                 const status = result.status || 'stopped';
 
-                // CRÍTICO: Si ya tenemos un timer ejecutándose localmente, NO iniciar otro
-                // sin importar lo que diga el servidor
-                if (this.isTimerRunning) {
-                    console.log('Timer ya ejecutándose localmente, ignorando estado del servidor para evitar duplicados');
+                // Calcular desfase de reloj si el servidor proporciona su hora actual
+                let clockOffset = 0;
+                if (result.serverTime) {
+                    const serverTime = new Date(result.serverTime).getTime();
+                    const clientTime = Date.now();
+                    clockOffset = serverTime - clientTime;
+                }
+
+                // Si el servidor reporta un estado terminal pero nosotros creemos que sigue corriendo/pausado localmente,
+                // debemos forzar la detención y actualizar el estado
+                const terminalStates = ['stopped', 'completed', 'cancelled', 'failed', 'error'];
+                if (terminalStates.includes(status)) {
+                    if (this.currentStatus === 'running' || this.currentStatus === 'paused') {
+                        console.log(`El servidor indica que el proceso ha finalizado (${status}). Deteniendo timer local...`);
+                        this.forceStopTimer();
+                        this.hideTimer();
+                        this.stopTimer();
+                        this.updateProcessStatus(status);
+                        return;
+                    }
+                }
+
+                // CRÍTICO: Si ya tenemos un timer ejecutándose localmente y el servidor coincide en que está ejecutándose,
+                // NO iniciar otro sin importar lo que diga el servidor
+                if (this.isTimerRunning && status === 'running') {
                     return;
                 }
 
-                // CRÍTICO: Si ya tenemos un proceso ejecutándose localmente y el servidor dice que está detenido,
-                // NO sobrescribir el estado local porque puede ser que acabamos de iniciar un proceso
-                // Solo actualizar si realmente hay una diferencia significativa
                 if ((status === 'running' || status === 'paused') && result.process) {
-                    // Solo actualizar si no tenemos el estado correcto localmente
                     if (this.currentStatus !== status) {
                         this.updateProcessStatus(status);
                         this.showTimer();
 
-                        // Sincronizar startTime si no lo tenemos
-                        if (result.process.startTime && !this.startTime) {
-                            const startTime = new Date(result.process.startTime);
-                            this.startTime = startTime.getTime();
-                            console.log('Sincronizado startTime con el servidor:', new Date(this.startTime).toISOString());
+                        // Sincronizar startTime si no lo tenemos o si cambió
+                        if (!this.startTime) {
+                            this.startTime = Date.now();
+                            console.log('Sincronizado startTime (Tiempo local):', new Date(this.startTime).toISOString());
                         }
 
                         // Si está corriendo, iniciar timer. Si está pausado, asegurar que el intervalo esté detenido.
@@ -61,13 +96,10 @@ class ProcessScreen {
                             this.startTimer();
                         } else if (status === 'paused') {
                             this.forceStopTimer();
-                            // Actualizar el display una vez para mostrar el tiempo actual basado en startTime
                             this.updateTimerDisplay();
                         }
                     }
                 } else {
-                    // Si el servidor dice que no hay proceso (stopped, completed, etc.)
-                    // Solo actualizar si realmente no estamos en un estado activo
                     if (this.currentStatus !== 'running' && this.currentStatus !== 'paused') {
                         this.updateProcessStatus(status);
                         this.hideTimer();
@@ -77,7 +109,6 @@ class ProcessScreen {
             }
         } catch (error) {
             console.error('Error cargando estado del proceso:', error);
-            // Si hay error, solo actualizar el estado si no tenemos uno local
             if (this.currentStatus === 'stopped') {
                 this.updateProcessStatus('stopped');
             }
@@ -389,7 +420,7 @@ class ProcessScreen {
             return;
         }
 
-        const elapsed = Date.now() - this.startTime;
+        const elapsed = Math.max(0, Date.now() - this.startTime);
         const hours = Math.floor(elapsed / 3600000);
         const minutes = Math.floor((elapsed % 3600000) / 60000);
         const seconds = Math.floor((elapsed % 60000) / 1000);

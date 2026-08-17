@@ -60,6 +60,12 @@ class RecipesScreen {
         console.log('RecipesScreen destroyed');
         this.stopProcessStatusMonitoring();
         
+        // Remover modal del body si existe
+        const modalElement = document.getElementById('recipe-form-modal');
+        if (modalElement) {
+            modalElement.remove();
+        }
+        
         // Remover listeners globales
         document.removeEventListener('click', this.handleRecipeSelection);
         document.removeEventListener('process-status-changed', this.handleProcessStatusChanged);
@@ -523,7 +529,20 @@ class RecipesScreen {
     }
 
     showRecipeForm(recipe = null) {
-        const modal = new bootstrap.Modal(document.getElementById('recipe-form-modal'));
+        const modalElement = document.getElementById('recipe-form-modal');
+        if (modalElement && modalElement.parentNode !== document.body) {
+            // Eliminar cualquier modal viejo en el body antes de mover el nuevo
+            const oldModal = document.querySelector('body > #recipe-form-modal');
+            if (oldModal && oldModal !== modalElement) {
+                oldModal.remove();
+            }
+            document.body.appendChild(modalElement);
+        }
+
+        let modal = bootstrap.Modal.getInstance(modalElement);
+        if (!modal) {
+            modal = new bootstrap.Modal(modalElement, { focus: false });
+        }
         
         // Initialize form
         this.initRecipeForm(recipe);
@@ -1051,7 +1070,7 @@ class RecipesScreen {
         document.body.insertAdjacentHTML('beforeend', modalHtml);
 
         // Mostrar modal
-        const modal = new bootstrap.Modal(document.getElementById('delete-confirmation-modal'));
+        const modal = new bootstrap.Modal(document.getElementById('delete-confirmation-modal'), { focus: false });
         modal.show();
 
         // Bind confirm button

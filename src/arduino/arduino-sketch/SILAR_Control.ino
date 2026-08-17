@@ -152,7 +152,7 @@ void setup() {
   stepperZ.setMaxSpeed(MAX_SPEED_Z);
   stepperZ.setAcceleration(MAX_ACCEL_Z);
   stepperZ.setMinPulseWidth(MIN_PULSE_WIDTH_US);
-  // Usar sentido físico nativo: Z+ baja (soluciones) y Z- sube (home)
+  stepperZ.setPinsInverted(true, false, false); // Invertir dirección física de Z: Z- baja y Z+ sube
   stepperZ.setCurrentPosition(posZ);
 
   // Configurar debounce
@@ -258,7 +258,6 @@ void loop() {
       procesoActivo = false;
       procesoPausado = false;
       cicloActual = 0;
-      // Desactivar accesorios al detener
       digitalWrite(lampPin, LOW);
       digitalWrite(fanPin, LOW);
       Serial.println("PROCESO_DETENIDO");
@@ -452,6 +451,13 @@ void parsearParametrosReceta(String json) {
   Serial.println(recipeParams.dippingWait3);
 }
 
+void pausarProcesoLimite() {
+  if (procesoActivo && !procesoPausado) {
+    procesoPausado = true;
+    Serial.println("PROCESO_PAUSADO");
+  }
+}
+
 void iniciarProcesoAutomatico() {
   if (modo != 1) {
     Serial.println("ERROR: Debe estar en modo automatico");
@@ -572,8 +578,12 @@ void ejecutarInmersion(long posYTarget, int tiempoEspera, int numInmersion) {
   
   if (!procesoActivo || procesoPausado || emergencyStop) return;
   
-  // Bajar Z para inmersión (Z+ baja físicamente)
-  moverEjeZVelocidad(recipeParams.dippingLength, recipeParams.dipSpeed);
+  // CORRECCIÓN: Limitar la inmersión para que no descuadre la subida y choque arriba
+  long bajadaReal = recipeParams.dippingLength;
+  if (bajadaReal > 4100) bajadaReal = 4100; // Nuestro tope de seguridad verificado
+  
+  // Bajar Z para inmersión (Z- baja físicamente con setPinsInverted)
+  moverEjeZVelocidad(-bajadaReal, recipeParams.dipSpeed);
   
   if (!procesoActivo || procesoPausado || emergencyStop) return;
   
@@ -588,8 +598,8 @@ void ejecutarInmersion(long posYTarget, int tiempoEspera, int numInmersion) {
   
   if (!procesoActivo || procesoPausado || emergencyStop) return;
   
-  // Subir Z (Z- sube físicamente)
-  moverEjeZVelocidad(-recipeParams.dippingLength, recipeParams.dipSpeed);
+  // Subir Z EXACTAMENTE lo mismo que bajó, para quedar en 0 perfecto y no chocar arriba
+  moverEjeZVelocidad(bajadaReal, recipeParams.dipSpeed);
   
   Serial.print("INMERSION_COMPLETADA: Y");
   Serial.println(numInmersion);
@@ -637,6 +647,16 @@ void moverEjeZVelocidad(long pasos, long velocidadMicrosegundos) {
 
   bool direccionPositiva = (pasos > 0);
   long objetivo = posZ + pasos;
+
+  // Límite virtual de seguridad (Software Limit)
+  // AXEL: Modifica este número si necesitas que baje más o menos.
+  // Es negativo porque va hacia abajo. Ej: -15000 baja menos, -30000 baja más.
+  const long LIMITE_SOFTWARE_Z_ABAJO = -4100; 
+  
+  if (!direccionPositiva && objetivo < LIMITE_SOFTWARE_Z_ABAJO) {
+    objetivo = LIMITE_SOFTWARE_Z_ABAJO;
+    Serial.println("ADVERTENCIA: Limite virtual de Z alcanzado");
+  }
 
   // Convertir microsegundos entre flancos a pasos/segundo (aproximado)
   long microsClamped = velocidadMicrosegundos <= 0 ? 200 : velocidadMicrosegundos;
@@ -693,15 +713,24 @@ void moverEjeZVelocidad(long pasos, long velocidadMicrosegundos) {
     }
 
     // 3. Verificar límites físicos según dirección
-    // Subir (Z-) → verificar homeSwitchZ (switch físico en pin 14)
-    if (!direccionPositiva && homeSwitchZ.getState() == HIGH) {
+    // Subir (Z+) → verificar homeSwitchZ (switch físico en pin 14)
+    if (direccionPositiva && homeSwitchZ.getState() == HIGH) {
       Serial.println("Limite Z Home alcanzado");
       stepperZ.stop();
       posZ = stepperZ.currentPosition();
       stepperZ.setCurrentPosition(posZ);
+      pausarProcesoLimite();
       break;
     }
-    // Bajar (Z+) → AccelStepper para en el objetivo exacto (no hay switch inferior físico)
+    // Bajar (Z-) → verificar limitMaxSwitchZ (switch físico en pin 15)
+    if (!direccionPositiva && limitMaxSwitchZ.getState() == HIGH) {
+      Serial.println("Limite Z Max alcanzado");
+      stepperZ.stop();
+      posZ = stepperZ.currentPosition();
+      stepperZ.setCurrentPosition(posZ);
+      pausarProcesoLimite();
+      break;
+    }
 
     stepperZ.run();
   }
@@ -727,12 +756,12 @@ void ejecutarHome() {
   digitalWrite(enablePinZ, LOW);
 
   // --- Home Z ---
-  // Mueve Z en la dirección del home (-) hasta que el switch se active (Z- sube físicamente)
+  // Mueve Z en la dirección del home (+) hasta que el switch se active (Z+ sube físicamente con setPinsInverted)
   posZ = 0;
   stepperZ.setCurrentPosition(0);
   stepperZ.setMaxSpeed(MAX_SPEED_Z * 0.5); // Velocidad reducida para home
   stepperZ.setAcceleration(MAX_ACCEL_Z);
-  stepperZ.moveTo(-4000); // Distancia máxima de búsqueda (UP es negativo)
+  stepperZ.moveTo(4000); // Distancia máxima de búsqueda (UP es positivo)
   while (stepperZ.distanceToGo() != 0) {
     emergencySwitch.loop();
     homeSwitchZ.loop();
@@ -742,9 +771,9 @@ void ejecutarHome() {
     }
     stepperZ.run();
   }
-  // Back-off: retroceder para liberar el switch (DOWN es positivo)
+  // Back-off: retroceder para liberar el switch (DOWN es negativo)
   stepperZ.setCurrentPosition(0);
-  stepperZ.moveTo(150); // Alejar del switch (DOWN)
+  stepperZ.moveTo(-150); // Alejar del switch (DOWN)
   while (stepperZ.distanceToGo() != 0) {
     stepperZ.run();
   }
@@ -846,11 +875,13 @@ void moverEjeY(long pasos) {
     if (direccionPositiva && limitMaxSwitchY.getState() == HIGH) {
       Serial.println("Limite Y Max alcanzado");
       stepperY.stop();
+      pausarProcesoLimite();
       break;
     }
     if (!direccionPositiva && homeSwitchY.getState() == HIGH) {
       Serial.println("Limite Y Min alcanzado");
       stepperY.stop();
+      pausarProcesoLimite();
       break;
     }
 
@@ -924,13 +955,20 @@ void moverEjeZ(long pasos) {
     }
 
     // 3. Verificar límites físicos
-    // Subir (Z-) → verificar homeSwitchZ (switch físico en pin 14)
-    if (!direccionPositiva && homeSwitchZ.getState() == HIGH) {
+    // Subir (Z+) → verificar homeSwitchZ (switch físico en pin 14)
+    if (direccionPositiva && homeSwitchZ.getState() == HIGH) {
       Serial.println("Limite Z Home alcanzado");
       stepperZ.stop();
+      pausarProcesoLimite();
       break;
     }
-    // Bajar (Z+) → AccelStepper para en el objetivo exacto (no hay switch inferior físico)
+    // Bajar (Z-) → verificar limitMaxSwitchZ (switch físico en pin 15)
+    if (!direccionPositiva && limitMaxSwitchZ.getState() == HIGH) {
+      Serial.println("Limite Z Max alcanzado");
+      stepperZ.stop();
+      pausarProcesoLimite();
+      break;
+    }
 
     stepperZ.run();
   }

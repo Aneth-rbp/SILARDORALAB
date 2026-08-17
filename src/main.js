@@ -8,6 +8,9 @@ const path = require('path');
 const { spawn } = require('child_process');
 const isDev = process.argv.includes('--dev');
 
+// Habilitar soporte para teclado virtual en pantallas táctiles de Windows
+app.commandLine.appendSwitch('enable-virtual-keyboard');
+
 // Variable para el proceso del servidor
 let serverProcess = null;
 
