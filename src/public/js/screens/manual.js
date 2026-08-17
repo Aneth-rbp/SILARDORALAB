@@ -304,19 +304,6 @@ class ManualScreen {
                 </div>
 
                 <!-- Paro de Emergencia -->
-                <div class="col-12">
-                    <div class="card border-danger shadow-sm">
-                        <div class="card-header bg-danger text-white py-2">
-                            <h6 class="mb-0 small fw-bold text-center"><i class="bi bi-exclamation-triangle me-2"></i>Emergencia</h6>
-                        </div>
-                        <div class="card-body p-3 text-center">
-                            <button class="btn btn-danger w-100 py-3" id="btn-emergency-stop">
-                                <i class="bi bi-stop-circle fs-3 me-2"></i>
-                                <span class="fw-bold fs-5">PARO DE EMERGENCIA</span>
-                            </button>
-                        </div>
-                    </div>
-                </div>
             </div>
         `;
     }
