@@ -1259,9 +1259,15 @@ body:not(.login-page) {
  */
 .process-indicator {
     display: flex;
-    align-items: center;
+    /* Por baseline y no centrado: los tres textos son de tamanos distintos y
+       el cronometro ademas va en monoespaciada, que se sienta mas abajo en su
+       propia caja. Centrando cajas cada texto quedaba a una altura y la pildora
+       se veia desalineada; con el baseline comun se apoyan todos en la misma
+       linea. */
+    align-items: baseline;
     gap: 0.6rem;
-    padding: 0.35rem 0.9rem;
+    padding: 0.4rem 0.9rem;
+    line-height: 1.1;
     border-radius: 999px;
     background: rgba(255, 255, 255, 0.15);
     border: 1px solid rgba(255, 255, 255, 0.35);
@@ -1274,7 +1280,12 @@ body:not(.login-page) {
 }
 
 .process-indicator-recipe {
-    font-size: 0.8rem;
+    /* Se centra en vez de apoyarse en el baseline: al recortar con overflow
+       oculto el navegador toma el borde inferior de la caja como baseline, no
+       el del texto, y el nombre de la receta quedaria montado sobre los
+       numeros. */
+    align-self: center;
+    font-size: 0.85rem;
     opacity: 0.85;
     max-width: 12ch;
     overflow: hidden;
@@ -1282,9 +1293,6 @@ body:not(.login-page) {
 }
 
 .process-indicator-cycles {
-    display: flex;
-    align-items: center;
-    gap: 0.3rem;
     font-size: 1rem;
     font-weight: 600;
     font-variant-numeric: tabular-nums;
@@ -1292,31 +1300,14 @@ body:not(.login-page) {
 
 .process-indicator-time {
     font-family: 'Courier New', monospace;
-    font-size: 1.05rem;
+    font-size: 1rem;
     font-weight: 700;
     letter-spacing: 0.5px;
-}
-
-/* La flecha gira mientras la maquina trabaja: de un vistazo se distingue una
-   corrida en marcha de una pausada, sin leer ningun texto. */
-.process-indicator.is-running .process-indicator-cycles i {
-    animation: process-indicator-spin 2.5s linear infinite;
 }
 
 .process-indicator.is-paused {
     background: rgba(255, 193, 7, 0.25);
     border-color: rgba(255, 193, 7, 0.7);
-}
-
-@keyframes process-indicator-spin {
-    from { transform: rotate(0deg); }
-    to { transform: rotate(360deg); }
-}
-
-@media (prefers-reduced-motion: reduce) {
-    .process-indicator.is-running .process-indicator-cycles i {
-        animation: none;
-    }
 }
 
 .header-right {
@@ -3305,8 +3296,14 @@ body:not(.login-page) {
     display: grid;
     grid-template-columns: 1fr 1fr;
     gap: 0.5rem;
-    flex: 1;
-    min-height: 0;
+    /* La rejilla se dimensiona por su contenido. Antes era `flex: 1` con
+       `min-height: 0`: mientras no hubiera nada debajo se notaba solo como una
+       rejilla estirada, pero en una receta por etapas la lista de etapas va
+       despues y el contenedor comprimia la rejilla por debajo de su alto real.
+       Las tarjetas se desbordaban (un grid no recorta a sus hijos) y la lista
+       de etapas se dibujaba encima. Lo que sobre lo scrollea .details-content,
+       que ya esta en overflow-y: auto. */
+    flex: 0 0 auto;
 }
 
 .param-item {

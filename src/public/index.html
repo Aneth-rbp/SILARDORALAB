@@ -44,24 +44,21 @@
                 <button class="btn btn-icon-only dashboard-center" onclick="window.silarApp.navigateToScreen('dashboard')" title="Volver al Dashboard">
                     <i class="bi bi-house-door"></i>
                 </button>
-
-                <!--
-                    Indicador de proceso: ciclo y tiempo transcurrido en todas
-                    las pantallas. El operador ya no tiene que volver a Proceso
-                    para saber por donde va la receta.
-                -->
-                <div class="process-indicator d-none" id="process-indicator" role="status" aria-live="polite">
-                    <span class="process-indicator-recipe" id="process-indicator-recipe"></span>
-                    <span class="process-indicator-cycles">
-                        <i class="bi bi-arrow-repeat"></i>
-                        <span id="process-indicator-cycles">--/--</span>
-                    </span>
-                    <span class="process-indicator-time" id="process-indicator-time">00:00:00</span>
-                </div>
             </div>
             
             <!-- Right Section -->
             <div class="header-right">
+                <!--
+                    Indicador de proceso: ciclo y tiempo transcurrido en todas
+                    las pantallas. Va junto al reloj para no competir con el
+                    boton de dashboard en el centro de la cabecera.
+                -->
+                <div class="process-indicator d-none" id="process-indicator" role="status" aria-live="polite">
+                    <span class="process-indicator-recipe" id="process-indicator-recipe"></span>
+                    <span class="process-indicator-cycles" id="process-indicator-cycles">--/--</span>
+                    <span class="process-indicator-time" id="process-indicator-time">00:00:00</span>
+                </div>
+
                 <!-- Clock -->
                 <div class="system-clock" id="system-clock"></div>
                 
@@ -112,7 +109,8 @@
         </div>
     </div>
 
-    <!-- Error Toast -->
+    <!-- Toasts: un unico contenedor para que se apilen en vez de
+         dibujarse uno encima de otro cuando coinciden dos avisos -->
     <div class="toast-container position-fixed bottom-0 end-0 p-3">
         <div id="error-toast" class="toast" role="alert" aria-live="assertive" aria-atomic="true">
             <div class="toast-header bg-danger text-white">
@@ -124,10 +122,26 @@
                 Ha ocurrido un error inesperado.
             </div>
         </div>
-    </div>
-
-    <!-- Success Toast -->
-    <div class="toast-container position-fixed bottom-0 end-0 p-3">
+        <div id="info-toast" class="toast" role="alert" aria-live="polite" aria-atomic="true">
+            <div class="toast-header bg-primary text-white">
+                <i class="bi bi-info-circle-fill me-2"></i>
+                <strong class="me-auto">Sistema</strong>
+                <button type="button" class="btn-close btn-close-white" data-bs-dismiss="toast" aria-label="Close"></button>
+            </div>
+            <div class="toast-body" id="info-message">
+                Procesando...
+            </div>
+        </div>
+        <div id="warning-toast" class="toast" role="alert" aria-live="assertive" aria-atomic="true">
+            <div class="toast-header bg-warning text-dark">
+                <i class="bi bi-exclamation-triangle-fill me-2"></i>
+                <strong class="me-auto">Atención</strong>
+                <button type="button" class="btn-close" data-bs-dismiss="toast" aria-label="Close"></button>
+            </div>
+            <div class="toast-body" id="warning-message">
+                Revisa el estado del equipo.
+            </div>
+        </div>
         <div id="success-toast" class="toast" role="alert" aria-live="assertive" aria-atomic="true">
             <div class="toast-header bg-success text-white">
                 <i class="bi bi-check-circle-fill me-2"></i>

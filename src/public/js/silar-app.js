@@ -83,6 +83,7 @@ class SilarApp {
         
         // Bind events for navigation
         this.bindEvents();
+        this.vigilarModalesHuerfanos();
         
         this.loadDashboard();
         
@@ -609,12 +610,20 @@ class SilarApp {
     }
 
     navigateToScreen(screenName, params = {}) {
-        // El control manual mueve los motores directamente. Entrar ahi con una
-        // receta corriendo significaria pelearse con la placa por el mismo
-        // hardware, asi que se bloquea la pantalla mientras haya proceso.
-        if (screenName === 'manual' && this.hayProcesoEnCurso()) {
-            this.showError('Hay una receta en proceso. Deten o termina el proceso antes de entrar al Control Manual.');
-            return;
+        // El control manual mueve los motores directamente, asi que entrar con
+        // una receta CORRIENDO seria pelearse con la placa por el mismo
+        // hardware. Con la receta PAUSADA si se deja pasar: cuando un switch de
+        // limite autopausa el proceso, mover el eje a mano es la unica forma de
+        // sacarlo de ahi, y bloquearlo dejaba la maquina atorada sin mas salida
+        // que detener la receta.
+        if (screenName === 'manual') {
+            if (this.procesoEnCurso.status === 'running') {
+                this.showError('Hay una receta ejecutandose. Pausala o detenla antes de entrar al Control Manual.');
+                return;
+            }
+            if (this.procesoEnCurso.status === 'paused') {
+                this.showWarning('Receta pausada: puedes mover los ejes para rescatarla, pero al reanudar la posicion ya no coincidira con la receta. Si mueves algo, lo sano es detener el proceso.');
+            }
         }
 
         // Validar permisos para pantallas restringidas
@@ -774,13 +783,68 @@ class SilarApp {
      */
     limpiarModalesHuerfanos() {
         if (document.querySelector('.modal.show')) {
-            return;
+            return false;
         }
 
-        document.querySelectorAll('.modal-backdrop').forEach((backdrop) => backdrop.remove());
+        let habiaBasura = document.body.classList.contains('modal-open');
+
+        document.querySelectorAll('.modal-backdrop').forEach((backdrop) => {
+            backdrop.remove();
+            habiaBasura = true;
+        });
+
+        // El backdrop no es la unica capa que puede quedarse pegada: el propio
+        // .modal es un fixed a pantalla completa y solo se apaga con el
+        // display:none que Bootstrap escribe al terminar el hide(). Si ese hide
+        // se queda a medias -porque se movio el modal de sitio, porque se
+        // destruyo la instancia antes de tiempo- el div sigue ahi, transparente
+        // y encima de todo. Es justo el sintoma que se ve en el laboratorio:
+        // la pantalla se ve normal pero ningun campo acepta el toque.
+        document.querySelectorAll('.modal').forEach((modal) => {
+            if (modal.style.display && modal.style.display !== 'none') {
+                modal.style.display = 'none';
+                habiaBasura = true;
+            }
+        });
+
         document.body.classList.remove('modal-open');
         document.body.style.removeProperty('overflow');
         document.body.style.removeProperty('padding-right');
+
+        return habiaBasura;
+    }
+
+    /**
+     * Red de seguridad para las capas de los modales.
+     *
+     * La limpieza de arriba solo corria al cambiar de pantalla, asi que si algo
+     * se quedaba pegado sin moverse de vista -abrir y cerrar el formulario de
+     * recetas sin salir de Recetas- la aplicacion se quedaba muerta al tacto
+     * hasta navegar a otra pantalla o recargar. Aqui se engancha en dos sitios:
+     *
+     *   1. Al cerrarse cualquier modal, que es cuando toca recoger.
+     *   2. Al tocar la pantalla, por si algo quedo pegado igualmente: si el
+     *      toque cae sobre una capa muerta se limpia y el siguiente toque ya
+     *      llega al formulario. Se comprueba con retraso para no cortarle la
+     *      animacion de cierre a un modal que si se esta cerrando bien.
+     */
+    vigilarModalesHuerfanos() {
+        document.addEventListener('hidden.bs.modal', () => this.limpiarModalesHuerfanos());
+
+        document.addEventListener('pointerdown', (evento) => {
+            const capa = evento.target;
+            if (!(capa instanceof Element)) return;
+
+            const esCapaMuerta = capa.classList.contains('modal-backdrop') ||
+                (capa.classList.contains('modal') && !capa.classList.contains('show'));
+            if (!esCapaMuerta) return;
+
+            setTimeout(() => {
+                if (this.limpiarModalesHuerfanos()) {
+                    console.warn('Se limpiaron capas de modal huerfanas que bloqueaban la pantalla');
+                }
+            }, 400);
+        }, true);
     }
 
     updateBreadcrumb(screenName) {
@@ -1150,6 +1214,34 @@ class SilarApp {
         if (toast && messageEl) {
             messageEl.textContent = message;
             const bsToast = new bootstrap.Toast(toast);
+            bsToast.show();
+        }
+    }
+
+    // El control manual y la pantalla de proceso ya la llamaban en siete
+    // sitios, pero nunca existio: cada aviso ("Ejecutando HOME...", "Moviendo
+    // eje Z") reventaba con TypeError y el operador se quedaba sin respuesta en
+    // pantalla aunque el comando si hubiera salido hacia la placa.
+    showInfo(message) {
+        const toast = document.getElementById('info-toast');
+        const messageEl = document.getElementById('info-message');
+
+        if (toast && messageEl) {
+            messageEl.textContent = message;
+            const bsToast = new bootstrap.Toast(toast);
+            bsToast.show();
+        }
+    }
+
+    // Para lo que no es un fallo pero el operador tiene que leer antes de
+    // seguir, como entrar al control manual con una receta pausada.
+    showWarning(message) {
+        const toast = document.getElementById('warning-toast');
+        const messageEl = document.getElementById('warning-message');
+
+        if (toast && messageEl) {
+            messageEl.textContent = message;
+            const bsToast = new bootstrap.Toast(toast, { delay: 10000 });
             bsToast.show();
         }
     }

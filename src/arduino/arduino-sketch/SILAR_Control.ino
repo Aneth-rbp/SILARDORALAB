@@ -286,6 +286,12 @@ ezButton emergencySwitch(emergencyPin);
 // Variables para proceso automático
 bool procesoActivo = false;
 bool procesoPausado = false;
+// Se enciende cuando el operador mueve un eje a mano con la receta pausada
+// (el rescate tipico: un switch pauso el proceso y hay que sacar el eje de
+// ahi). Con esto, al reanudar no se retoma el tramo que quedo a medias: su
+// objetivo se calculo con la posicion vieja y volveria a meter el eje justo
+// donde estaba atorado.
+bool ejeMovidoAManoEnPausa = false;
 int cicloActual = 0;
 int ciclosTotales = 0;
 
@@ -1191,6 +1197,7 @@ void iniciarProcesoAutomatico() {
   
   procesoActivo = true;
   procesoPausado = false;
+  ejeMovidoAManoEnPausa = false;
   cicloActual = 0;
   ciclosTotales = recipeParams.cycles;
   
@@ -1244,25 +1251,25 @@ void ejecutarProcesoAutomatico() {
     ejecutarInmersion(posicionVasoPasos(0), recipeParams.dippingWait0, 1);
   }
   
-  if (!procesoActivo || procesoPausado || emergencyStop) return;
+  if (!esperarSiPausado()) return;
   
   if (!recipeParams.exceptDripping2) {
     ejecutarInmersion(posicionVasoPasos(1), recipeParams.dippingWait1, 2);
   }
   
-  if (!procesoActivo || procesoPausado || emergencyStop) return;
+  if (!esperarSiPausado()) return;
   
   if (!recipeParams.exceptDripping3) {
     ejecutarInmersion(posicionVasoPasos(2), recipeParams.dippingWait2, 3);
   }
   
-  if (!procesoActivo || procesoPausado || emergencyStop) return;
+  if (!esperarSiPausado()) return;
   
   if (!recipeParams.exceptDripping4) {
     ejecutarInmersion(posicionVasoPasos(3), recipeParams.dippingWait3, 4);
   }
   
-  if (!procesoActivo || procesoPausado || emergencyStop) return;
+  if (!esperarSiPausado()) return;
   
   Serial.print("CICLO_COMPLETADO: ");
   Serial.print(cicloActual + 1);
@@ -1280,7 +1287,7 @@ void ejecutarProcesoAutomatico() {
 }
 
 void ejecutarInmersion(long posYTarget, int tiempoEspera, int numInmersion) {
-  if (!procesoActivo || procesoPausado || emergencyStop) {
+  if (!esperarSiPausado()) {
     return;
   }
   
@@ -1290,12 +1297,12 @@ void ejecutarInmersion(long posYTarget, int tiempoEspera, int numInmersion) {
   // Mover a posición Y
   moverEjeYAbsoluto(posYTarget);
   
-  if (!procesoActivo || procesoPausado || emergencyStop) return;
+  if (!esperarSiPausado()) return;
   
   // Esperar tiempo de transferencia
   delay(recipeParams.transferWait);
   
-  if (!procesoActivo || procesoPausado || emergencyStop) return;
+  if (!esperarSiPausado()) return;
   
   long zAntesDeBajar = posZ;
   long bajadaReal = mmAPasosZ(recipeParams.dippingLength);
@@ -1319,18 +1326,20 @@ void ejecutarInmersion(long posYTarget, int tiempoEspera, int numInmersion) {
   long microsEmersion = velocidadMMsAMicros(velocidadEmersionMMs(), PASOS_POR_MM_Z);
   moverEjeZVelocidad(-bajadaReal, microsDip);
   
-  if (!procesoActivo || procesoPausado || emergencyStop) return;
+  if (!esperarSiPausado()) return;
   
   // Esperar tiempo de inmersión
+  // El tiempo se cuenta en reloj de pared a proposito: durante una pausa el
+  // sustrato sigue sumergido, asi que ese rato cuenta como inmersion.
   unsigned long tiempoInicio = millis();
   while (millis() - tiempoInicio < tiempoEspera) {
-    if (!procesoActivo || procesoPausado || emergencyStop) {
+    if (!esperarSiPausado()) {
       return;
     }
     delay(100); // Verificar cada 100ms
   }
   
-  if (!procesoActivo || procesoPausado || emergencyStop) return;
+  if (!esperarSiPausado()) return;
   
   // Subir EXACTAMENTE lo que realmente bajó, leyendo la posición real en vez de
   // la solicitada: si el límite virtual o un switch recortó el descenso, esto
@@ -1373,6 +1382,60 @@ void verificarComandosDuranteMovimiento() {
   }
 }
 
+// Congela la receta mientras esta pausada, en vez de abandonar el paso a medias.
+// Devuelve true si se puede continuar justo donde se quedo, y false si durante
+// la espera llego un STOP o un paro de emergencia.
+//
+// Antes cada paso hacia "return" al ver procesoPausado: la inmersion se
+// abandonaba despues de bajar y el ascenso nunca ocurria, asi que cada
+// pausa/reanudacion dejaba Z mas abajo que al empezar. Pausando y reanudando
+// varias veces seguidas el eje caminaba hasta el switch de fondo, y ahi cada
+// RESUME volvia a autopausarse.
+bool esperarSiPausado() {
+  bool avisado = false;
+
+  while (procesoActivo && procesoPausado && !emergencyStop) {
+    homeSwitchY.loop();
+    limitMinSwitchY.loop();
+    limitMaxSwitchY.loop();
+    homeSwitchZ.loop();
+    limitMinSwitchZ.loop();
+    limitMaxSwitchZ.loop();
+    emergencySwitch.loop();
+
+    if (emergencySwitch.getState() == HIGH) {
+      emergencyStop = true;
+      procesoActivo = false;
+      procesoPausado = false;
+      stepperY.stop();
+      stepperZ.stop();
+      digitalWrite(enablePinY, HIGH);
+      digitalWrite(enablePinZ, HIGH);
+      Serial.println("PARO DE EMERGENCIA ACTIVADO");
+      break;
+    }
+
+    // loop() no corre mientras esperamos aqui, asi que hay que seguir
+    // atendiendo el serial y publicando STATUS a mano: sin esto la PC veria la
+    // placa muda y el RESUME nunca llegaria.
+    verificarComandosDuranteMovimiento();
+
+    if (!avisado) {
+      avisado = true;
+      Serial.println("Receta en pausa: el paso en curso queda congelado");
+    }
+
+    if (millis() - ultimoStatusMs >= STATUS_INTERVAL_MS) {
+      ultimoStatusMs = millis();
+      enviarStatus();
+    }
+
+    delay(10);
+  }
+
+  return procesoActivo && !procesoPausado && !emergencyStop;
+}
+
 void moverEjeZVelocidad(long pasos, long velocidadMicrosegundos) {
   if (emergencyStop || (emergencySwitch.getState() == HIGH)) {
     Serial.println("Error: Paro de emergencia activo");
@@ -1383,6 +1446,22 @@ void moverEjeZVelocidad(long pasos, long velocidadMicrosegundos) {
 
   bool direccionPositiva = (pasos > 0);
   long objetivo = posZ + pasos;
+
+  // Si el switch de ese lado ya esta pisado no tiene sentido arrancar: se
+  // pausaria a los pocos pasos una y otra vez. Mejor decirlo claro para que el
+  // operador sepa que toca rescatar el eje a mano.
+  homeSwitchZ.loop();
+  limitMaxSwitchZ.loop();
+  if (direccionPositiva && homeSwitchZ.getState() == HIGH) {
+    Serial.println("ADVERTENCIA: Z ya esta en el switch de arriba, no se puede subir mas");
+    pausarProcesoLimite();
+    return;
+  }
+  if (!direccionPositiva && limitMaxSwitchZ.getState() == HIGH) {
+    Serial.println("ADVERTENCIA: Z ya esta en el switch de abajo, no se puede bajar mas");
+    pausarProcesoLimite();
+    return;
+  }
 
   // Límite virtual de seguridad (Software Limit).
   // Ya no es un número mágico: sale de ALTURA_MINIMA_MM y la calibración,
@@ -1449,12 +1528,40 @@ void moverEjeZVelocidad(long pasos, long velocidadMicrosegundos) {
     // 2. Escuchar comandos serie (STOP/PAUSE) durante el movimiento
     verificarComandosDuranteMovimiento();
 
-    if (emergencyStop || (procesoActivo && procesoPausado)) {
+    if (emergencyStop) {
       Serial.println("Movimiento Z interrumpido");
       stepperZ.stop();
       posZ = stepperZ.currentPosition();
       stepperZ.setCurrentPosition(posZ);
       break;
+    }
+
+    // Pausa: frenar donde este, esperar, y RETOMAR el mismo objetivo. Antes
+    // aqui habia un break y el tramo que faltaba se perdia para siempre, que es
+    // lo que dejaba el eje un poco mas abajo despues de cada pausa.
+    if (procesoActivo && procesoPausado) {
+      stepperZ.stop();
+      while (stepperZ.distanceToGo() != 0) {   // frenada suave, sin perder pasos
+        homeSwitchZ.loop();
+        limitMaxSwitchZ.loop();
+        if (direccionPositiva && homeSwitchZ.getState() == HIGH) break;
+        if (!direccionPositiva && limitMaxSwitchZ.getState() == HIGH) break;
+        stepperZ.run();
+      }
+      posZ = stepperZ.currentPosition();
+      stepperZ.setCurrentPosition(posZ);
+
+      if (!esperarSiPausado()) break;   // llego STOP o paro de emergencia
+
+      if (ejeMovidoAManoEnPausa) {
+        Serial.println("AVISO: Z se movio a mano durante la pausa, el tramo pendiente se descarta");
+        break;
+      }
+
+      stepperZ.setMaxSpeed(velocidadTarget);
+      stepperZ.setAcceleration(aceleracion);
+      stepperZ.moveTo(objetivo);
+      continue;
     }
     if (procesoEnCurso && !procesoActivo) {
       Serial.println("Movimiento Z cancelado");
@@ -1640,10 +1747,23 @@ void moverEjeY(long pasos) {
       stepperY.stop();
       break;
     }
+    // Mismo criterio que en Z: la pausa congela el tramo y luego lo termina.
     if (procesoActivo && procesoPausado) {
-      Serial.println("Movimiento Y pausado");
       stepperY.stop();
-      break;
+      while (stepperY.distanceToGo() != 0) {
+        homeSwitchY.loop();
+        limitMaxSwitchY.loop();
+        if (direccionPositiva && limitMaxSwitchY.getState() == HIGH) break;
+        if (!direccionPositiva && homeSwitchY.getState() == HIGH) break;
+        stepperY.run();
+      }
+
+      if (!esperarSiPausado()) break;
+
+      stepperY.setMaxSpeed(velocidadY);
+      stepperY.setAcceleration(MAX_ACCEL_Y);
+      stepperY.moveTo(objetivo);
+      continue;
     }
 
     // 3. Verificar límites físicos según dirección
@@ -1703,6 +1823,7 @@ void moverEjeZ(long pasos) {
   // justo lo que hace falta para rescatarlo, y bloquearlo dejaba la máquina
   // muerta sin más salida que STOP.
   if (procesoActivo && procesoPausado) {
+    ejeMovidoAManoEnPausa = true;
     Serial.println("AVISO: Receta pausada. El jog manual la descuadrara si luego se reanuda con RESUME.");
   }
 

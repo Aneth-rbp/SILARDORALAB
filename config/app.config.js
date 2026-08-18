@@ -19,23 +19,34 @@ const pkg = require('../package.json');
  *   { "database": { "password": "loQueSea" }, "arduino": { "port": "COM3" } }
  */
 function loadLocalOverrides() {
-  // En la app instalada el archivo vive en la carpeta de datos del usuario; en
-  // desarrollo (npm run web / npm run dev sin empaquetar) se busca en la raíz
-  // del repo, que está en .gitignore. Así cada equipo apunta a su motor -aquí
-  // MySQL en Docker, en MTY XAMPP- sin tocar el código ni el default.
-  const file = process.env.USER_DATA_PATH
-    ? path.join(process.env.USER_DATA_PATH, 'silar-config.json')
-    : path.join(__dirname, '..', 'silar-config.json');
+  // Se buscan dos ubicaciones, en orden de prioridad:
+  //
+  //   1. La carpeta de datos del usuario, que es donde vive en la instalacion
+  //      del laboratorio y sobrevive a las actualizaciones.
+  //   2. La raiz del repositorio, que esta en .gitignore, para desarrollo.
+  //
+  // Son las dos y no una sola porque main.js exporta USER_DATA_PATH tambien con
+  // `npm run dev`: si se tomara esa variable como senal de "estoy instalado",
+  // en desarrollo bajo Electron se ignoraria el archivo del repo y la app
+  // caeria al default de XAMPP, sin poder entrar a MySQL en Docker.
+  const candidatos = [
+    process.env.USER_DATA_PATH && path.join(process.env.USER_DATA_PATH, 'silar-config.json'),
+    path.join(__dirname, '..', 'silar-config.json')
+  ].filter(Boolean);
 
-  try {
-    if (!fs.existsSync(file)) {
+  for (const file of candidatos) {
+    try {
+      if (!fs.existsSync(file)) {
+        continue;
+      }
+      return JSON.parse(fs.readFileSync(file, 'utf8'));
+    } catch (error) {
+      console.error(`No se pudo leer ${file}: ${error.message}`);
       return {};
     }
-    return JSON.parse(fs.readFileSync(file, 'utf8'));
-  } catch (error) {
-    console.error(`No se pudo leer ${file}: ${error.message}`);
-    return {};
   }
+
+  return {};
 }
 
 const localOverrides = loadLocalOverrides();

@@ -19,11 +19,15 @@ class UsersScreen {
         // dispose() antes de remove(): si el modal sigue abierto, Bootstrap se
         // lleva su backdrop. Borrando solo el markup queda un div a pantalla
         // completa que bloquea todos los clicks de la aplicacion.
-        const modalElement = document.getElementById('userModal');
-        if (modalElement) {
+        // Todas las copias y no solo getElementById: el modal se muda al body
+        // al abrirlo, asi que si la pantalla se repinta quedan dos elementos con
+        // el mismo id y getElementById devuelve el del contenedor, dejando vivo
+        // justo el del body -el que tiene la instancia y el que se queda como
+        // capa invisible encima de la pantalla-.
+        document.querySelectorAll('#userModal').forEach((modalElement) => {
             bootstrap.Modal.getInstance(modalElement)?.dispose();
             modalElement.remove();
-        }
+        });
     }
 
     async init() {
@@ -196,7 +200,9 @@ class UsersScreen {
 
     showUserModal(user = null) {
         const modalElement = document.getElementById('userModal');
-        if (modalElement && modalElement.parentNode !== document.body) {
+        if (!modalElement) return;
+
+        if (modalElement.parentNode !== document.body) {
             // Eliminar cualquier modal viejo en el body antes de mover el nuevo
             const oldModal = document.querySelector('body > #userModal');
             if (oldModal && oldModal !== modalElement) {
@@ -205,6 +211,10 @@ class UsersScreen {
             }
             document.body.appendChild(modalElement);
         }
+
+        // El doble toque de la pantalla tactil llegaba dos veces: el segundo
+        // reiniciaba el formulario con el modal ya abierto.
+        if (modalElement.classList.contains('show')) return;
 
         let modal = bootstrap.Modal.getInstance(modalElement);
         if (!modal) {

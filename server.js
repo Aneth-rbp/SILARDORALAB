@@ -53,7 +53,42 @@ class SilarWebServer {
     // reclamar un proceso que quedó abierto de una ejecución anterior.
     this.plazoAdopcionHuerfanos = 0;
     this.ultimaReconciliacion = 0;
+    // Cola de arranques de proceso. Ver conArranqueEnExclusiva().
+    this.colaDeArranque = Promise.resolve();
     this.setupExpress();
+  }
+
+  /**
+   * Serializa los arranques de proceso: mientras uno esté en curso, el
+   * siguiente espera su turno.
+   *
+   * Sin esto, dos peticiones simultáneas a /api/process/start consultaban las dos
+   * que no había proceso activo antes de que ninguna hubiera insertado el suyo,
+   * y las dos arrancaban: dos filas en 'running' y dos recetas mandadas a la
+   * misma placa. La comprobación y el INSERT tienen que ser un solo paso.
+   *
+   * El turno se conserva hasta que la receta está cargada en el Arduino, no
+   * sólo hasta el INSERT: una receta por etapas viaja etapa por etapa y tarda
+   * segundos, y durante ese rato la máquina tampoco está libre.
+   *
+   * Basta con una exclusión dentro del proceso porque este servidor es el único
+   * que escribe en processes y el único que habla con la placa.
+   */
+  async conArranqueEnExclusiva(tarea) {
+    const turnoAnterior = this.colaDeArranque;
+    let liberar;
+    this.colaDeArranque = new Promise((resolve) => { liberar = resolve; });
+
+    // El turno anterior nunca rechaza (siempre se libera en su finally), pero
+    // se encadena con catch por si acaso: una promesa rota aquí dejaría la cola
+    // atascada y no se podría volver a arrancar nada.
+    await turnoAnterior.catch(() => {});
+
+    try {
+      return await tarea();
+    } finally {
+      liberar();
+    }
   }
 
   // Middleware de autenticación
@@ -2051,7 +2086,67 @@ class SilarWebServer {
     }
   }
 
+  /**
+   * Deshace un arranque que no llegó a cuajar en la placa.
+   *
+   * Devuelve el Arduino a modo manual antes que nada: el comando "1" del
+   * firmware pone procesoActivo y procesoPausado en false, así que si el
+   * START_RECIPE llegó a entrar pese al error (un timeout no distingue entre
+   * "no llegó" y "llegó y no contestó"), la máquina queda parada y no corriendo
+   * una receta que el servidor da por muerta.
+   *
+   * Después cierra la fila como 'failed' y limpia el estado en memoria, para
+   * que el reconciliador no siga esperando a que la placa reclame una corrida
+   * que nunca existió.
+   */
+  async abortarArranque(processId, causa) {
+    try {
+      if (this.arduinoController.isConnected) {
+        await this.arduinoController.setModeManual();
+      }
+    } catch (error) {
+      logger.error('No se pudo devolver el Arduino a modo manual tras el arranque fallido', {
+        processId,
+        error
+      });
+    }
+
+    this.procesoConfirmadoPorArduino = false;
+    this.lecturasProcesoInactivo = 0;
+    this.plazoAdopcionHuerfanos = 0;
+    this.currentStage = null;
+    this.currentCycle = null;
+
+    try {
+      await this.dbConnection.execute(
+        `UPDATE processes
+            SET status = 'failed', end_time = NOW(), duration_minutes = 0, error_message = ?
+          WHERE id = ?`,
+        [`No se pudo cargar la receta en el Arduino: ${causa?.message || causa}`, processId]
+      );
+      logger.warn(`Proceso ${processId} marcado como fallido: la receta no llegó a cargarse en el Arduino.`);
+    } catch (error) {
+      // Si esto falla la fila se queda en 'running'. No es una fuga permanente:
+      // adoptarProcesosHuerfanos() la cierra en el siguiente arranque, y el
+      // reconciliador la cancela en cuanto la placa no la reclame.
+      logger.error('No se pudo marcar como fallido el proceso tras el error del Arduino', {
+        processId,
+        error
+      });
+    }
+
+    this.io.emit('process-stage', null);
+    this.io.emit('process-cycle', null);
+    this.io.emit('process-status-update', { status: 'failed', processId });
+  }
+
   async startProcess(req, res) {
+    // Todo el arranque va en exclusiva: comprobar que no hay nada corriendo,
+    // insertar la fila y cargar la receta en la placa son un solo paso.
+    return this.conArranqueEnExclusiva(() => this.ejecutarArranqueDeProceso(req, res));
+  }
+
+  async ejecutarArranqueDeProceso(req, res) {
     try {
       const { recipeId } = req.body;
 
@@ -2181,14 +2276,37 @@ class SilarWebServer {
         // });
       }
 
-      // Crear nuevo proceso en la base de datos
+      // Crear nuevo proceso en la base de datos.
+      //
+      // El número definitivo se pone en un segundo paso porque se deriva del id,
+      // que no existe hasta después del INSERT. Antes se sacaba de RAND() sobre
+      // cuatro dígitos, y process_number tiene un UNIQUE: a partir de ~120
+      // procesos en un mismo día la probabilidad de chocar pasa del 50% y el
+      // arranque fallaba con un error de clave duplicada. Con el id no hay
+      // colisión posible y además quedan ordenados.
+      //
+      // El valor de entrada es un provisional único: la columna es NOT NULL y
+      // UNIQUE, así que no puede quedar vacía ni repetida ni un instante.
       const [result] = await this.dbConnection.execute(
-        `INSERT INTO processes (recipe_id, process_number, status, start_time, operator_name, parameters) 
-         VALUES (?, CONCAT('PROC-', DATE_FORMAT(NOW(), '%Y%m%d'), '-', LPAD(FLOOR(RAND() * 10000), 4, '0')), 'running', NOW(), ?, ?)`,
+        `INSERT INTO processes (recipe_id, process_number, status, start_time, operator_name, parameters)
+         VALUES (?, CONCAT('TMP-', UUID()), 'running', NOW(), ?, ?)`,
         [validRecipeId, req.user?.fullName || req.user?.username || 'Usuario', JSON.stringify(parameters)]
       );
 
       const processId = result.insertId;
+
+      try {
+        await this.dbConnection.execute(
+          `UPDATE processes
+              SET process_number = CONCAT('PROC-', DATE_FORMAT(start_time, '%Y%m%d'), '-', LPAD(id, 4, '0'))
+            WHERE id = ?`,
+          [processId]
+        );
+      } catch (error) {
+        // El proceso ya está creado y es válido; sólo se queda con la etiqueta
+        // provisional. No se aborta la corrida por el nombre de una columna.
+        logger.error('No se pudo asignar el número definitivo al proceso', { processId, error });
+      }
 
       // Publicar los parámetros de la receta: las tarjetas de monitoreo los
       // esperan con estos mismos nombres (dippingWait0, transferSpeed, ...)
@@ -2231,9 +2349,20 @@ class SilarWebServer {
           logger.info('Proceso automático iniciado en Arduino', { processId, recipeId: validRecipeId, parameters });
 
         } catch (arduinoError) {
+          // La placa estaba conectada y aun así no aceptó la receta: la corrida
+          // no ha empezado. Antes esto sólo se registraba y la petición
+          // respondía success, con la fila en 'running': el operador veía un
+          // proceso en marcha que no existía, y esa fila abierta impedía
+          // arrancar el siguiente hasta detener a mano un proceso fantasma.
           logger.error('Error enviando comandos al Arduino al iniciar proceso:', arduinoError);
-          // No fallar el proceso si hay error con Arduino, solo loguear
-          // El proceso puede continuar en modo simulación
+
+          await this.abortarArranque(processId, arduinoError);
+
+          return res.status(502).json({
+            success: false,
+            message: `No se pudo cargar la receta en el Arduino: ${arduinoError.message}. El proceso no se inició.`,
+            processNumber: processData[0].process_number
+          });
         }
       }
 

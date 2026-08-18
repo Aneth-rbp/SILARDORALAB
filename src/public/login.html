@@ -496,6 +496,7 @@
             init() {
                 this.bindEvents();
                 this.checkSystemStatus();
+                this.startStatusUpdate();
                 this.updateTime();
                 this.startTimeUpdate();
                 this.usernameInput.focus();
@@ -739,6 +740,15 @@
 
             startTimeUpdate() {
                 setInterval(() => this.updateTime(), 1000);
+            }
+
+            // El estado se consulta en bucle, no una sola vez al cargar. El
+            // servidor escanea el puerto serial al arrancar y la pantalla de
+            // login suele pintarse antes de que termine: con una sola consulta
+            // los indicadores se quedaban en rojo aunque el Arduino y MySQL ya
+            // estuvieran conectados, y solo un F5 los corregia.
+            startStatusUpdate() {
+                setInterval(() => this.checkSystemStatus(), 5000);
             }
         }
 

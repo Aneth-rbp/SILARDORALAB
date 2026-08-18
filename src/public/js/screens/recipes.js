@@ -103,11 +103,17 @@ class RecipesScreen {
         // Remover modal del body si existe. dispose() antes de remove(): si el
         // modal sigue abierto, Bootstrap se lleva su backdrop; borrando solo el
         // markup queda el backdrop tapando la aplicacion entera.
-        const modalElement = document.getElementById('recipe-form-modal');
-        if (modalElement) {
+        //
+        // Se recorren todas las copias y no solo getElementById: el modal se
+        // muda al body al abrirlo, asi que si la pantalla se repinta puede
+        // haber dos elementos con el mismo id. getElementById devuelve el del
+        // contenedor -el que va antes en el DOM- y dejaba vivo justo el del
+        // body, que es el que tiene la instancia de Bootstrap y el que se queda
+        // como capa transparente encima de todo.
+        document.querySelectorAll('#recipe-form-modal').forEach((modalElement) => {
             bootstrap.Modal.getInstance(modalElement)?.dispose();
             modalElement.remove();
-        }
+        });
         
         // Remover listeners globales
         document.removeEventListener('click', this.handleRecipeSelection);
@@ -468,7 +474,7 @@ class RecipesScreen {
                 
                 <div class="details-content">
                     <div class="recipe-name">
-                        ${recipe.name}
+                        ${this.escapeHtml(recipe.name)}
                         ${recipe.is_staged ? '<span class="badge bg-info ms-2">Por etapas</span>' : ''}
                     </div>
                     
@@ -535,8 +541,6 @@ class RecipesScreen {
                     ${etapasHtml}
                 </div>
             </div>
-                </div>
-            </div>
         `;
     }
 
@@ -592,7 +596,9 @@ class RecipesScreen {
 
     showRecipeForm(recipe = null) {
         const modalElement = document.getElementById('recipe-form-modal');
-        if (modalElement && modalElement.parentNode !== document.body) {
+        if (!modalElement) return;
+
+        if (modalElement.parentNode !== document.body) {
             // Eliminar cualquier modal viejo en el body antes de mover el nuevo
             const oldModal = document.querySelector('body > #recipe-form-modal');
             if (oldModal && oldModal !== modalElement) {
@@ -602,6 +608,12 @@ class RecipesScreen {
             document.body.appendChild(modalElement);
         }
 
+        // En la pantalla tactil un toque suele llegar duplicado. El segundo
+        // caia aqui con el modal ya abierto: Bootstrap ignora ese show() pero
+        // el formulario se reinicializaba encima, borrando lo escrito. Con el
+        // modal ya visible no hay nada que hacer.
+        if (modalElement.classList.contains('show')) return;
+
         let modal = bootstrap.Modal.getInstance(modalElement);
         if (!modal) {
             modal = new bootstrap.Modal(modalElement, { focus: false });
@@ -610,6 +622,28 @@ class RecipesScreen {
         // Initialize form
         this.initRecipeForm(recipe);
         modal.show();
+    }
+
+    /**
+     * Cierra el formulario de recetas dejando el DOM limpio.
+     *
+     * Si por lo que sea no hay instancia de Bootstrap viva, se apaga el modal a
+     * mano: lo importante es que no quede ni el backdrop ni el propio .modal
+     * como capa invisible sobre la pantalla.
+     */
+    cerrarFormulario() {
+        const modalElement = document.getElementById('recipe-form-modal');
+        if (!modalElement) return;
+
+        const modal = bootstrap.Modal.getInstance(modalElement);
+        if (modal) {
+            modal.hide();
+            return;
+        }
+
+        modalElement.classList.remove('show');
+        modalElement.style.display = 'none';
+        this.app.limpiarModalesHuerfanos();
     }
 
     initRecipeForm(recipe) {
@@ -756,8 +790,16 @@ class RecipesScreen {
 
         const updateFn = () => this.updateAutoDuration(form);
 
+        // Una sola vez por campo: el formulario vive en el DOM entre apertura y
+        // apertura, asi que enganchar aqui sin marcar dejaba un listener nuevo
+        // cada vez que se abria. Tras un rato de trabajo cada tecleo disparaba
+        // el recalculo N veces y los campos se volvian pesados en la pantalla
+        // tactil.
         triggerIds.forEach(id => {
-            form.querySelector(`#${id}`)?.addEventListener('input', updateFn);
+            const campo = form.querySelector(`#${id}`);
+            if (!campo || campo.dataset.autoDuracionBinded) return;
+            campo.dataset.autoDuracionBinded = '1';
+            campo.addEventListener('input', updateFn);
         });
 
         // Calcular valor inicial
@@ -830,9 +872,12 @@ class RecipesScreen {
             ['#recipe-emersion-speed', RecipesScreen.MAX_Z_SPEED_MMS, 'mm/s']
         ];
 
+        // Igual que en el autocalculo de duracion: un listener por campo y no
+        // uno por apertura del formulario.
         limites.forEach(([selector, maximo, unidad]) => {
             const input = form.querySelector(selector);
-            if (!input) return;
+            if (!input || input.dataset.limiteBinded) return;
+            input.dataset.limiteBinded = '1';
 
             input.addEventListener('input', (e) => {
                 const value = parseFloat(e.target.value) || 0;
@@ -1524,9 +1569,11 @@ class RecipesScreen {
                 this.app.showSuccess('Receta creada correctamente');
             }
 
-            // Cerrar modal
-            const modal = bootstrap.Modal.getInstance(document.getElementById('recipe-form-modal'));
-            modal.hide();
+            // Cerrar modal. Sin la instancia -si el modal se repinto por el
+            // camino- un modal.hide() a secas lanzaba TypeError aqui dentro del
+            // try: la receta quedaba guardada pero el usuario veia un error y el
+            // formulario abierto.
+            this.cerrarFormulario();
             
             // Actualizar la vista sin recargar desde el servidor
             this.renderRecipesList();
@@ -1651,9 +1698,9 @@ class RecipesScreen {
                         <div class="modal-body">
                             <p>¿Está seguro que desea eliminar la receta:</p>
                             <div class="alert alert-warning">
-                                <strong>${recipe.name}</strong>
+                                <strong>${this.escapeHtml(recipe.name)}</strong>
                                 <br>
-                                <small class="text-muted">Creada por: ${recipe.created_by_name}</small>
+                                <small class="text-muted">Creada por: ${this.escapeHtml(recipe.created_by_name)}</small>
                             </div>
                             <p class="text-danger mb-0">
                                 <i class="bi bi-info-circle me-1"></i>
@@ -1726,8 +1773,11 @@ class RecipesScreen {
             }
         };
 
-        // Limpiar modal al cerrar
+        // Limpiar modal al cerrar. dispose() ademas de remove(): quitando solo
+        // el markup, Bootstrap se queda con la instancia y sus listeners
+        // apuntando a un elemento que ya no existe.
         document.getElementById('delete-confirmation-modal').addEventListener('hidden.bs.modal', function() {
+            bootstrap.Modal.getInstance(this)?.dispose();
             this.remove();
         });
     }

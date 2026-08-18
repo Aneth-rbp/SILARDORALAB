@@ -12,21 +12,17 @@ class ProcessScreen {
         // mismo y todas las comprobaciones eran `currentStatus !== status`.
         this.currentProcessId = null;
         this.handleStageChanged = this.handleStageChanged.bind(this);
-        this.timer = null;
         this.currentStatus = 'stopped'; // Almacenar el estado actual
-        this.startTime = null; // Inicializar startTime
-        this.isTimerRunning = false; // Flag para evitar múltiples timers
-        // El cronómetro se congela durante la pausa, así que hay que descontar
-        // lo que duró: sin esto, al reanudar el número saltaba de golpe con
-        // todo el tiempo que la máquina estuvo parada.
-        this.pausedAccumMs = 0;
-        this.pausedSinceMs = null;
+        // Candado del boton pausar/reanudar. Sin el, cada clic mandaba su
+        // comando a la placa sin esperar al anterior: machacando el boton se
+        // encolaban PAUSE y RESUME contra un Arduino que aun estaba a media
+        // maniobra.
+        this.cambiandoPausa = false;
         this.init();
     }
 
     destroy() {
         console.log('ProcessScreen destroyed');
-        this.forceStopTimer();
         this.stopStatusPolling();
         document.removeEventListener('process-stage-changed', this.handleStageChanged);
     }
@@ -93,14 +89,6 @@ class ProcessScreen {
                 const processId = result.process ? result.process.id : null;
                 const terminalStates = ['stopped', 'completed', 'cancelled', 'failed', 'error'];
 
-                // Calcular desfase de reloj si el servidor proporciona su hora actual
-                let clockOffset = 0;
-                if (result.serverTime) {
-                    const serverTime = new Date(result.serverTime).getTime();
-                    const clientTime = Date.now();
-                    clockOffset = serverTime - clientTime;
-                }
-
                 // El servidor dice que ya no hay proceso: se limpia todo. Antes
                 // esto solo entraba si localmente creíamos estar corriendo, así
                 // que un estado a medias se quedaba pegado en la pantalla.
@@ -120,19 +108,6 @@ class ProcessScreen {
                     console.log(`Proceso nuevo detectado (id ${processId}). Sincronizando con el servidor...`);
                     this.clearProcessState();
                     this.currentProcessId = processId;
-                    // El arranque real lo tiene el servidor. Se corrige por el
-                    // desfase de reloj para que el cronómetro no salga torcido
-                    // si el PC va desajustado respecto a MySQL.
-                    // El transcurrido preferido es el que calcula MySQL con
-                    // TIMESTAMPDIFF: no depende ni de la zona horaria del motor
-                    // ni del reloj del equipo. El startTime crudo queda como
-                    // respaldo, corregido por el desfase de reloj.
-                    const inicioServidor = result.process.startTime
-                        ? new Date(result.process.startTime).getTime()
-                        : null;
-                    this.startTime = result.process.elapsedSeconds != null
-                        ? Date.now() - result.process.elapsedSeconds * 1000
-                        : (inicioServidor ? inicioServidor - clockOffset : Date.now());
                 }
 
                 // Se sincroniza siempre contra el servidor, no solo cuando el
@@ -140,17 +115,6 @@ class ProcessScreen {
                 // es quien tiene la razón sobre si está corriendo o pausado.
                 if (this.currentStatus !== status) {
                     this.updateProcessStatus(status);
-                }
-
-                this.showTimer();
-
-                if (status === 'running') {
-                    this.marcarReanudado();
-                    if (!this.isTimerRunning) this.startTimer();
-                } else if (status === 'paused') {
-                    this.marcarPausado();
-                    this.forceStopTimer();
-                    this.updateTimerDisplay();
                 }
             }
         } catch (error) {
@@ -168,11 +132,24 @@ class ProcessScreen {
         });
 
         // Pause/Resume process button (toggle)
-        document.getElementById('pause-process-btn')?.addEventListener('click', () => {
-            if (this.currentStatus === 'paused') {
-                this.resumeProcess();
-            } else {
-                this.pauseProcess();
+        document.getElementById('pause-process-btn')?.addEventListener('click', async () => {
+            if (this.cambiandoPausa) return;
+
+            this.cambiandoPausa = true;
+            const boton = document.getElementById('pause-process-btn');
+            if (boton) boton.disabled = true;
+
+            try {
+                if (this.currentStatus === 'paused') {
+                    await this.resumeProcess();
+                } else {
+                    await this.pauseProcess();
+                }
+            } finally {
+                this.cambiandoPausa = false;
+                // updateButtonStates decide si vuelve a habilitarse segun el
+                // estado que quedo, asi que no se reactiva a ciegas.
+                this.updateButtonStates(this.currentStatus);
             }
         });
 
@@ -198,17 +175,6 @@ class ProcessScreen {
                 return;
             }
 
-            // CRÍTICO: Limpiar COMPLETAMENTE cualquier timer existente ANTES de iniciar
-            console.log('Iniciando proceso - Limpiando timers anteriores...');
-            this.forceStopTimer();
-            this.resetTimerDisplay();
-            this.hideTimer();
-            // Forzar reset completo del startTime
-            this.startTime = null;
-
-            // Pequeño delay para asegurar que todo esté limpio
-            await new Promise(resolve => setTimeout(resolve, 50));
-
             const result = await this.app.apiCall('/process/start', {
                 method: 'POST',
                 body: JSON.stringify({
@@ -220,19 +186,12 @@ class ProcessScreen {
                 this.app.showSuccess(result.message || 'Proceso iniciado correctamente');
                 this.updateProcessStatus('running');
 
-                // CRÍTICO: Establecer nuevo tiempo de inicio DESPUÉS de que el servidor confirme
-                // Usar el tiempo actual del cliente para evitar problemas de sincronización
-                // NO usar el startTime del servidor para procesos nuevos iniciados desde aquí
-                this.pausedAccumMs = 0;
-                this.pausedSinceMs = null;
                 this.currentProcessId = result.processId || null;
-                this.startTime = Date.now();
 
-                console.log('Nuevo proceso iniciado con startTime:', new Date(this.startTime).toISOString());
-
-                // Mostrar y iniciar el timer inmediatamente
-                this.showTimer();
-                this.startTimer();
+                // El cronómetro vive en el encabezado de la aplicación, que se
+                // refresca cada 5 segundos. Se le avisa ya para que aparezca al
+                // instante en vez de esperar al siguiente sondeo.
+                this.app.refrescarEstadoDelProceso();
 
                 // NO recargar el estado del servidor aquí porque acabamos de iniciar el proceso
                 // y ya tenemos el estado correcto localmente
@@ -262,10 +221,6 @@ class ProcessScreen {
             if (result && result.success) {
                 this.app.showSuccess(result.message || 'Proceso pausado');
                 this.updateProcessStatus('paused');
-
-                // Pausar el timer pero mantenerlo visible
-                this.marcarPausado();
-                this.forceStopTimer();
             }
 
         } catch (error) {
@@ -285,12 +240,6 @@ class ProcessScreen {
             if (result && result.success) {
                 this.app.showSuccess(result.message || 'Proceso reanudado');
                 this.updateProcessStatus('running');
-                this.marcarReanudado();
-                // Si el timer no está ejecutándose, iniciarlo
-                // Si ya está ejecutándose, no hacer nada (el tiempo ya está correcto)
-                if (!this.isTimerRunning) {
-                    this.startTimer();
-                }
             }
 
         } catch (error) {
@@ -312,9 +261,11 @@ class ProcessScreen {
                     this.app.showSuccess(result.message || 'Proceso detenido');
                     this.updateProcessStatus('stopped');
 
-                    // CRÍTICO: Detener y ocultar el timer COMPLETAMENTE
-                    console.log('Deteniendo proceso - Limpiando timers...');
                     this.clearProcessState();
+
+                    // El encabezado se entera enseguida de que ya no hay nada
+                    // corriendo, sin esperar a su sondeo de cada 5 segundos.
+                    this.app.refrescarEstadoDelProceso();
 
                     // NO recargar el estado del servidor aquí porque puede interferir
                     // si el usuario inicia un nuevo proceso inmediatamente después
@@ -419,124 +370,13 @@ class ProcessScreen {
         return classes[status] || 'bg-secondary';
     }
 
-    showTimer() {
-        const timerElement = document.getElementById('process-timer');
-        if (timerElement) {
-            timerElement.style.visibility = 'visible';
-            timerElement.classList.add('timer-active');
-        }
-    }
-
-    hideTimer() {
-        const timerElement = document.getElementById('process-timer');
-        if (timerElement) {
-            timerElement.style.visibility = 'hidden';
-            timerElement.classList.remove('timer-active');
-        }
-    }
-
-    startTimer() {
-        // CRÍTICO: Verificar ANTES de hacer cualquier cosa si ya hay un timer ejecutándose
-        if (this.isTimerRunning) {
-            console.warn('⚠️ Timer ya está ejecutándose, abortando inicio de nuevo timer');
-            return;
-        }
-
-        // CRÍTICO: Detener TODOS los timers posibles primero
-        this.forceStopTimer();
-
-        // CRÍTICO: Asegurarse de que startTime esté establecido y sea válido
-        // Si no hay startTime o es null/undefined, establecerlo ahora
-        if (!this.startTime || typeof this.startTime !== 'number') {
-            this.startTime = Date.now();
-        }
-
-        // Marcar que el timer está ejecutándose ANTES de crear el intervalo
-        this.isTimerRunning = true;
-
-        // Inicializar el display inmediatamente con el tiempo correcto
-        this.updateTimerDisplay();
-
-        // Crear el nuevo intervalo
-        this.timer = setInterval(() => {
-            this.updateTimerDisplay();
-        }, 1000);
-
-        console.log('✅ Timer iniciado con startTime:', new Date(this.startTime).toISOString());
-    }
-
-    updateTimerDisplay() {
-        const timerDisplay = document.getElementById('timer-display');
-        if (!timerDisplay) return;
-
-        // Si no hay startTime, no podemos calcular nada (mostrar 0 o nada)
-        if (!this.startTime || typeof this.startTime !== 'number') {
-            timerDisplay.textContent = '00:00:00';
-            return;
-        }
-
-        // El tiempo que estuvo en pausa no cuenta como tiempo de proceso.
-        const enPausa = this.pausedSinceMs !== null ? Date.now() - this.pausedSinceMs : 0;
-        const elapsed = Math.max(0, Date.now() - this.startTime - this.pausedAccumMs - enPausa);
-        const hours = Math.floor(elapsed / 3600000);
-        const minutes = Math.floor((elapsed % 3600000) / 60000);
-        const seconds = Math.floor((elapsed % 60000) / 1000);
-
-        timerDisplay.textContent =
-            `${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
-    }
-
     /**
-     * Deja la pantalla como si no hubiera proceso: sin cronómetro, sin id, sin
-     * etapa y sin el tiempo de pausa acumulado. Todo junto en un sitio porque
-     * olvidarse de uno de ellos es lo que dejaba rastros de la corrida anterior.
+     * Deja la pantalla como si no hubiera proceso: sin id y sin etapa. El
+     * tiempo transcurrido ya no se pinta aquí, lo lleva el encabezado.
      */
     clearProcessState() {
-        this.forceStopTimer();
-        this.hideTimer();
-        this.resetTimerDisplay();
-        this.startTime = null;
         this.currentProcessId = null;
-        this.pausedAccumMs = 0;
-        this.pausedSinceMs = null;
         this.updateStageBadge(null);
-    }
-
-    /** Abre el conteo de la pausa. Idempotente: pausar dos veces no suma dos. */
-    marcarPausado() {
-        if (this.pausedSinceMs === null) {
-            this.pausedSinceMs = Date.now();
-        }
-    }
-
-    /** Cierra la pausa en curso y la acumula para descontarla del cronómetro. */
-    marcarReanudado() {
-        if (this.pausedSinceMs !== null) {
-            this.pausedAccumMs += Date.now() - this.pausedSinceMs;
-            this.pausedSinceMs = null;
-        }
-    }
-
-    forceStopTimer() {
-        // Detener TODOS los intervalos posibles
-        if (this.timer) {
-            try {
-                clearInterval(this.timer);
-            } catch (e) {
-                console.error('Error deteniendo timer:', e);
-            }
-            this.timer = null;
-        }
-
-        // Resetear el flag
-        this.isTimerRunning = false;
-    }
-
-    resetTimerDisplay() {
-        const timerDisplay = document.getElementById('timer-display');
-        if (timerDisplay) {
-            timerDisplay.textContent = '00:00:00';
-        }
     }
 
     static getTemplate() {
@@ -563,9 +403,6 @@ class ProcessScreen {
                                 <div class="d-flex flex-column align-items-center gap-2">
                                     <span class="badge bg-secondary fs-5 py-2 px-3" id="process-status">Detenido</span>
                                     <span class="badge bg-info fs-6 py-2 px-3 d-none" id="process-stage"></span>
-                                    <div id="process-timer" style="visibility: hidden;">
-                                        <span class="badge bg-dark fs-3 py-2 px-4" id="timer-display">00:00:00</span>
-                                    </div>
                                 </div>
                             </div>
                             
