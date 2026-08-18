@@ -437,27 +437,13 @@ class RecipesScreen {
         const etapas = Array.isArray(recipe.stages) ? recipe.stages : [];
 
         // En una receta por etapas, los parámetros de arriba son el resumen
-        // (duración y ciclos totales, el resto de la primera etapa). El detalle
-        // real es la secuencia.
+        // (duración y ciclos totales, el resto de la primera etapa). Aquí solo
+        // se indica cuántas etapas hay; el desglose se ve al editar la receta.
         const etapasHtml = recipe.is_staged && etapas.length > 0 ? `
             <div class="stages-summary mt-3">
-                <h6 class="fw-bold text-primary">
+                <h6 class="fw-bold text-primary mb-0">
                     <i class="bi bi-list-ol me-2"></i>Etapas (${etapas.length})
                 </h6>
-                <p class="text-muted small mb-2">
-                    Se ejecutan seguidas en una sola corrida, sin home ni pausa entre una y la siguiente.
-                </p>
-                <ol class="mb-0 ps-3">
-                    ${etapas.map((etapa, i) => `
-                        <li class="small mb-1">
-                            <strong>${this.escapeHtml(etapa.name || `Etapa ${i + 1}`)}</strong>
-                            — ${etapa.cycles || 0} ciclos · ~${this.stageDurationMinutes(etapa)} min
-                            <span class="text-muted">
-                                (inmersiones ${etapa.dippingWait0 || 0}/${etapa.dippingWait1 || 0}/${etapa.dippingWait2 || 0}/${etapa.dippingWait3 || 0} ms,
-                                Z ${etapa.dipSpeed || '--'}/${etapa.emersionSpeed || etapa.dipSpeed || '--'} mm/s, ventilador ${etapa.fan ? 'encendido' : 'apagado'})
-                            </span>
-                        </li>`).join('')}
-                </ol>
             </div>` : '';
         
         // Debug: mostrar los parámetros en la consola
