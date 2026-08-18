@@ -12,7 +12,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
   
   // Verificar estado del servidor
   checkServer: () => ipcRenderer.invoke('check-server'),
-  
+
+  // Devolverle el foco del teclado al contenido web despues de que se cierre un
+  // dialogo nativo (confirm/alert/prompt). Solo el proceso principal puede
+  // hacerlo; ver js/foco-dialogos.js.
+  restaurarFoco: () => ipcRenderer.invoke('restaurar-foco-ventana'),
+
   // Notificaciones del sistema
   showNotification: (title, body) => {
     if ('Notification' in window) {

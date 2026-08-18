@@ -1175,9 +1175,12 @@ void finalizarProceso() {
   Serial.println("LAMPARA_DESACTIVADA");
   aplicarVentilador(false);
 
-  // Regresar a Home automáticamente al finalizar la receta exitosamente
-  Serial.println("PROCESO_FINALIZADO: Regresando a Home automaticamente...");
-  ejecutarHome();
+  // Aquí ya no se hace home. Antes se ejecutaba siempre, y eso dejaba sin
+  // efecto la casilla "regresar a home al terminar" de la receta: sin
+  // marcarla la máquina volvía igual, y marcándola volvía dos veces. Ahora
+  // manda la receta: el servidor lee recipes.return_home_at_end y, al
+  // recibir PROCESO_COMPLETADO, manda el HOME solo si está marcada
+  // (regresarAHomeSiLaRecetaLoPidio en server.js).
 }
 
 // Deja una sola etapa cargada con lo que ya hay en recipeParams. Es el camino

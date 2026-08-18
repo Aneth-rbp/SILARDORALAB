@@ -477,6 +477,19 @@ ipcMain.handle('check-server', async () => {
   });
 });
 
+// Un confirm() o un alert() de la pagina se abren como dialogo de Windows, y al
+// cerrarse la ventana recupera el foco del sistema pero su contenido web no: la
+// aplicacion se ve normal y responde al raton, y sin embargo no se puede
+// escribir en ningun campo. La pagina no puede arreglarlo por si sola, asi que
+// lo pide por aqui; ver public/js/foco-dialogos.js.
+ipcMain.handle('restaurar-foco-ventana', () => {
+  if (!mainWindow || mainWindow.isDestroyed()) return false;
+
+  mainWindow.focus();
+  mainWindow.webContents.focus();
+  return true;
+});
+
 // Prevenir múltiples instancias
 const gotTheLock = app.requestSingleInstanceLock();
 

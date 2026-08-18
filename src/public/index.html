@@ -187,6 +187,11 @@
     <!-- Bootstrap JS (Local) -->
     <script src="js/bootstrap.bundle.min.js"></script>
     
+    <!-- Envuelve confirm/alert/prompt para que la pagina no se quede sin foco
+         de teclado cuando se cierra un dialogo nativo. Va antes que todo lo que
+         los usa. -->
+    <script src="js/foco-dialogos.js"></script>
+
     <!-- Screen Scripts (cargar primero) -->
     <script src="js/screens/dashboard.js"></script>
     <script src="js/screens/recipes.js"></script>
