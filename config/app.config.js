@@ -4,7 +4,39 @@
  */
 
 const path = require('path');
+const fs = require('fs');
 const pkg = require('../package.json');
+
+/**
+ * Overrides de la instalación local.
+ *
+ * Permite corregir la conexión a MySQL o el puerto del Arduino en un equipo
+ * remoto editando un JSON, sin recompilar ni publicar una versión nueva. Vive
+ * en la carpeta de datos del usuario, así que sobrevive a las actualizaciones:
+ *
+ *   %APPDATA%\SILAR System\silar-config.json
+ *
+ *   { "database": { "password": "loQueSea" }, "arduino": { "port": "COM3" } }
+ */
+function loadLocalOverrides() {
+  if (!process.env.USER_DATA_PATH) {
+    return {};
+  }
+
+  const file = path.join(process.env.USER_DATA_PATH, 'silar-config.json');
+
+  try {
+    if (!fs.existsSync(file)) {
+      return {};
+    }
+    return JSON.parse(fs.readFileSync(file, 'utf8'));
+  } catch (error) {
+    console.error(`No se pudo leer ${file}: ${error.message}`);
+    return {};
+  }
+}
+
+const localOverrides = loadLocalOverrides();
 
 module.exports = {
   // Configuración de la aplicación
@@ -20,17 +52,24 @@ module.exports = {
   },
 
   // Configuración de la base de datos
+  //
+  // Los valores por defecto son los de XAMPP, que es lo que corre en el equipo
+  // del laboratorio: MariaDB en 3306 con root sin contraseña. Para desarrollo
+  // con MySQL en Docker hay que exportar DB_PASSWORD (y DB_PORT si aplica), o
+  // dejarlo en silar-config.json. Un default distinto a XAMPP deja al equipo de
+  // MTY sin base de datos.
   database: {
     host: process.env.DB_HOST || '127.0.0.1',
     port: process.env.DB_PORT || 3306,
     user: process.env.DB_USER || 'root',
-    password: process.env.DB_PASSWORD || '12345',
+    password: process.env.DB_PASSWORD ?? '',
     database: process.env.DB_NAME || 'silar_db',
     charset: 'utf8mb4',
     timezone: 'local',
     connectionLimit: 10,
     acquireTimeout: 60000,
-    timeout: 60000
+    timeout: 60000,
+    ...localOverrides.database
   },
 
   // Configuración de Arduino
@@ -40,7 +79,8 @@ module.exports = {
     timeout: 5000,
     retryAttempts: 3,
     retryDelay: 1000,
-    port: process.env.ARDUINO_PORT || null
+    port: process.env.ARDUINO_PORT || null,
+    ...localOverrides.arduino
   },
 
   // Configuración de seguridad

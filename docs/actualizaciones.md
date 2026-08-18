@@ -64,6 +64,32 @@ funcionando con la versión instalada.
   actualiza la aplicación de escritorio. Si el cambio incluye
   `SILAR_Control.ino`, hay que flashear el Arduino con el IDE en sitio.
 
+## Ajustes por equipo sin recompilar
+
+Los valores por defecto apuntan a XAMPP: MariaDB en `127.0.0.1:3306` con `root`
+sin contraseña. Si un equipo necesita otra cosa (contraseña en root, MySQL en
+otro puerto, un COM fijo para el Arduino), se crea este archivo **en el equipo**,
+sin tocar el código ni publicar una versión:
+
+```
+%APPDATA%\SILAR System\silar-config.json
+```
+
+```json
+{
+  "database": { "password": "loQueSea", "port": 3307 },
+  "arduino": { "port": "COM3" }
+}
+```
+
+Solo hay que incluir las claves que se quieren cambiar; el resto conserva su
+valor por defecto. El archivo vive en la carpeta de datos del usuario, así que
+**sobrevive a las actualizaciones**. Si tiene un JSON inválido se ignora y se
+avisa en el log, sin impedir el arranque.
+
+Para desarrollo con MySQL en Docker en vez de XAMPP, lo mismo se puede hacer con
+variables de entorno: `DB_PASSWORD`, `DB_PORT`, `DB_HOST`.
+
 ## Diagnóstico
 
 El updater escribe su propio log en la carpeta de datos del usuario, no en la

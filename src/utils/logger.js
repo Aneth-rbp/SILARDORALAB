@@ -34,10 +34,35 @@ class Logger {
     const formattedMessage = `[${timestamp}] [${level.toUpperCase()}] ${message}`;
     
     if (data) {
-      return `${formattedMessage} ${JSON.stringify(data)}`;
+      return `${formattedMessage} ${this.serialize(data)}`;
     }
-    
+
     return formattedMessage;
+  }
+
+  /**
+   * JSON.stringify convierte un Error en "{}" porque sus propiedades no son
+   * enumerables, así que los logs perdían el motivo real de las fallas
+   * (conexión serial, MySQL). Aquí se aplanan a mano.
+   */
+  serialize(data) {
+    const flatten = (value) => ({
+      message: value.message,
+      code: value.code,
+      errno: value.errno
+    });
+
+    if (data instanceof Error) {
+      return JSON.stringify(flatten(data));
+    }
+
+    try {
+      return JSON.stringify(data, (key, value) => (
+        value instanceof Error ? flatten(value) : value
+      ));
+    } catch (error) {
+      return String(data);
+    }
   }
 
   writeToFile(message) {
