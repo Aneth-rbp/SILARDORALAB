@@ -40,6 +40,18 @@ const appConfig = {
   icon: path.join(__dirname, 'public', 'assets', 'dora-logo.png')
 };
 
+// En el laboratorio la app es lo unico que corre en ese equipo, asi que arranca
+// en modo kiosko: pantalla completa, sin barra de titulo, sin barra de tareas y
+// sin F11 para salirse. En desarrollo se queda en ventana para no pelear con el
+// editor y las devtools.
+//
+// La salida es Ctrl+Shift+K (menu Ver > "Salir de modo kiosko"). Sin ese atajo
+// el operador se queda encerrado si la app se cuelga, asi que no lo quites.
+// Para forzarlo en cualquier sentido: SILAR_KIOSK=1 o SILAR_KIOSK=0.
+const modoKiosko = process.env.SILAR_KIOSK !== undefined
+  ? process.env.SILAR_KIOSK === '1'
+  : !isDev;
+
 function createWindow() {
   // Crear la ventana del navegador
   mainWindow = new BrowserWindow({
@@ -55,6 +67,7 @@ function createWindow() {
       preload: path.join(__dirname, 'preload.js')
     },
     show: false, // No mostrar hasta que esté listo
+    kiosk: modoKiosko,
     titleBarStyle: 'default',
     autoHideMenuBar: !isDev
   });
@@ -332,7 +345,18 @@ function createMenu() {
         { role: 'zoomIn' },
         { role: 'zoomOut' },
         { type: 'separator' },
-        { role: 'togglefullscreen' }
+        { role: 'togglefullscreen' },
+        {
+          // Unica forma de llegar al escritorio con la app en kiosko. El menu
+          // esta oculto (autoHideMenuBar), pero el acelerador funciona igual.
+          label: 'Salir de modo kiosko',
+          accelerator: 'Ctrl+Shift+K',
+          click: () => {
+            if (mainWindow) {
+              mainWindow.setKiosk(!mainWindow.isKiosk());
+            }
+          }
+        }
       ]
     },
     {
