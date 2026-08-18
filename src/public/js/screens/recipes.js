@@ -16,7 +16,7 @@ class RecipesScreen {
     // panel de geometría; pasarse de aquí no rompe nada, solo hace que el
     // firmware recorte y avise.
     static MAX_TRANSFER_SPEED_MMS = 26;
-    static MAX_DIP_SPEED_MMS = 100;
+    static MAX_Z_SPEED_MMS = 100;
 
     // Recorrido útil del eje Y en mm: el final de carrera está en 14027 pasos y
     // con los 76.36 pasos/mm de fábrica salen 183.7 mm. Es el tope para las
@@ -100,9 +100,12 @@ class RecipesScreen {
         console.log('RecipesScreen destroyed');
         this.stopProcessStatusMonitoring();
         
-        // Remover modal del body si existe
+        // Remover modal del body si existe. dispose() antes de remove(): si el
+        // modal sigue abierto, Bootstrap se lleva su backdrop; borrando solo el
+        // markup queda el backdrop tapando la aplicacion entera.
         const modalElement = document.getElementById('recipe-form-modal');
         if (modalElement) {
+            bootstrap.Modal.getInstance(modalElement)?.dispose();
             modalElement.remove();
         }
         
@@ -138,25 +141,18 @@ class RecipesScreen {
     }
 
     /**
-     * Verifica el estado actual del proceso
+     * Verifica el estado actual del proceso.
+     *
+     * Ya no consulta la API por su cuenta: lee el estado que la aplicación
+     * mantiene vivo todo el tiempo. Así el botón de ejecutar nace deshabilitado
+     * al entrar a Recetas con una receta corriendo, en vez de habilitarse un
+     * instante hasta que respondiera el primer sondeo propio de la pantalla.
      */
-    async checkProcessStatus() {
-        try {
-            const result = await this.app.apiCall('/process/status', {
-                method: 'GET'
-            });
-            
-            if (result && result.success) {
-                this.processStatus = result.status || 'stopped';
-                // Actualizar botones según el estado del proceso
-                this.updateActionButtons();
-            }
-        } catch (error) {
-            console.error('Error verificando estado del proceso:', error);
-            // Si hay error, asumir que no hay proceso ejecutándose
-            this.processStatus = 'stopped';
-            this.updateActionButtons();
-        }
+    checkProcessStatus() {
+        this.processStatus = this.app.hayProcesoEnCurso()
+            ? this.app.procesoEnCurso.status
+            : 'stopped';
+        this.updateActionButtons();
     }
 
     /**
@@ -168,10 +164,11 @@ class RecipesScreen {
             clearInterval(this.processStatusCheckInterval);
         }
         
-        // Verificar cada 5 segundos
+        // Es solo leer el estado en memoria, no hay red de por medio, así que
+        // se puede refrescar cada segundo sin costo.
         this.processStatusCheckInterval = setInterval(() => {
             this.checkProcessStatus();
-        }, 5000);
+        }, 1000);
     }
 
     /**
@@ -451,7 +448,7 @@ class RecipesScreen {
                             — ${etapa.cycles || 0} ciclos · ~${this.stageDurationMinutes(etapa)} min
                             <span class="text-muted">
                                 (inmersiones ${etapa.dippingWait0 || 0}/${etapa.dippingWait1 || 0}/${etapa.dippingWait2 || 0}/${etapa.dippingWait3 || 0} ms,
-                                Z ${etapa.dipSpeed || '--'} mm/s, ventilador ${etapa.fan ? 'encendido' : 'apagado'})
+                                Z ${etapa.dipSpeed || '--'}/${etapa.emersionSpeed || etapa.dipSpeed || '--'} mm/s, ventilador ${etapa.fan ? 'encendido' : 'apagado'})
                             </span>
                         </li>`).join('')}
                 </ol>
@@ -483,22 +480,6 @@ class RecipesScreen {
                         <div class="param-item">
                             <span class="param-label">Temperatura</span>
                             <span class="param-value">${params.temperature || '--'} °C</span>
-                        </div>
-                        <div class="param-item">
-                            <span class="param-label">Velocidad X</span>
-                            <span class="param-value">${params.velocityX || '--'} rpm</span>
-                        </div>
-                        <div class="param-item">
-                            <span class="param-label">Velocidad Y</span>
-                            <span class="param-value">${params.velocityY || '--'} rpm</span>
-                        </div>
-                        <div class="param-item">
-                            <span class="param-label">Aceleración X</span>
-                            <span class="param-value">${params.accelX || '--'} rpm/s</span>
-                        </div>
-                        <div class="param-item">
-                            <span class="param-label">Aceleración Y</span>
-                            <span class="param-value">${params.accelY || '--'} rpm/s</span>
                         </div>
                         <div class="param-item">
                             <span class="param-label">Offset Humedad</span>
@@ -615,6 +596,7 @@ class RecipesScreen {
             // Eliminar cualquier modal viejo en el body antes de mover el nuevo
             const oldModal = document.querySelector('body > #recipe-form-modal');
             if (oldModal && oldModal !== modalElement) {
+                bootstrap.Modal.getInstance(oldModal)?.dispose();
                 oldModal.remove();
             }
             document.body.appendChild(modalElement);
@@ -636,8 +618,6 @@ class RecipesScreen {
 
         // Obtener configuraciones del sistema (límites y defaults)
         const config = this.systemConfig || {};
-        const maxVelocityY = config.max_velocity_y || 1000;
-        const maxAccelY = config.max_accel_y || 100;
         const defaultHumidityOffset = config.humidity_offset || 0;
         const defaultTempOffset = config.temperature_offset || 0;
 
@@ -649,10 +629,6 @@ class RecipesScreen {
             form.querySelector('#recipe-description').value = recipe.description || '';
             form.querySelector('#recipe-duration').value = params.duration || '';
             form.querySelector('#recipe-temperature').value = params.temperature || '';
-            form.querySelector('#recipe-velocity-x').value = params.velocityX || '';
-            form.querySelector('#recipe-velocity-y').value = params.velocityY || '';
-            form.querySelector('#recipe-accel-x').value = params.accelX || '';
-            form.querySelector('#recipe-accel-y').value = params.accelY || '';
             form.querySelector('#recipe-humidity-offset').value = params.humidityOffset || '';
             form.querySelector('#recipe-temp-offset').value = params.temperatureOffset || '';
             // Tiempos de inmersión
@@ -673,6 +649,9 @@ class RecipesScreen {
             form.querySelector('#recipe-dipping-length').value = params.dippingLength || '';
             form.querySelector('#recipe-transfer-speed').value = params.transferSpeed || '';
             form.querySelector('#recipe-dip-speed').value = params.dipSpeed || '';
+            // Vacío = subir a la misma velocidad de bajada. Se deja en blanco en
+            // vez de escribir un 0, que parecería una velocidad elegida a propósito.
+            form.querySelector('#recipe-emersion-speed').value = params.emersionSpeed || '';
             // Posición de cada vaso. Se deja el campo vacío cuando vale 0, que es
             // como se dice "usa la geometría calibrada de la máquina": un 0 escrito
             // parecería una posición elegida a propósito.
@@ -698,31 +677,25 @@ class RecipesScreen {
             document.getElementById('save-recipe-btn').textContent = 'Guardar Receta';
         }
 
-        // Aplicar límites máximos a los campos.
-        // Los dos primeros son los campos heredados en rpm, que solo viajan a la
-        // base. Los dos de abajo llegan al firmware y van en mm/s, con el tope
-        // físico del eje: no se leen de la configuración porque no son ajustables,
-        // los fija la mecánica (ver MAX_TRANSFER_SPEED_MMS / MAX_DIP_SPEED_MMS).
-        const velocityYInput = form.querySelector('#recipe-velocity-y');
-        const accelYInput = form.querySelector('#recipe-accel-y');
-        const transferSpeedInput = form.querySelector('#recipe-transfer-speed'); // Velocidad de transferencia Y
-        const dipSpeedInput = form.querySelector('#recipe-dip-speed');           // Velocidad de inmersión/emersión Z
+        // Aplicar límites máximos a los campos. Los tres llegan al firmware y van
+        // en mm/s, con el tope físico del eje: no se leen de la configuración
+        // porque no son ajustables, los fija la mecánica (ver
+        // MAX_TRANSFER_SPEED_MMS / MAX_Z_SPEED_MMS).
+        const transferSpeedInput = form.querySelector('#recipe-transfer-speed');   // Velocidad de transferencia Y
+        const dipSpeedInput = form.querySelector('#recipe-dip-speed');             // Bajada del eje Z
+        const emersionSpeedInput = form.querySelector('#recipe-emersion-speed');   // Subida del eje Z
 
-        if (velocityYInput) {
-            velocityYInput.setAttribute('max', maxVelocityY);
-            velocityYInput.setAttribute('title', `Máximo: ${maxVelocityY} rpm`);
-        }
-        if (accelYInput) {
-            accelYInput.setAttribute('max', maxAccelY);
-            accelYInput.setAttribute('title', `Máximo: ${maxAccelY} rpm/s`);
-        }
         if (transferSpeedInput) {
             transferSpeedInput.setAttribute('max', RecipesScreen.MAX_TRANSFER_SPEED_MMS);
             transferSpeedInput.setAttribute('title', `Máximo: ${RecipesScreen.MAX_TRANSFER_SPEED_MMS} mm/s`);
         }
         if (dipSpeedInput) {
-            dipSpeedInput.setAttribute('max', RecipesScreen.MAX_DIP_SPEED_MMS);
-            dipSpeedInput.setAttribute('title', `Máximo: ${RecipesScreen.MAX_DIP_SPEED_MMS} mm/s. Aplica igual a la inmersion y a la emersion.`);
+            dipSpeedInput.setAttribute('max', RecipesScreen.MAX_Z_SPEED_MMS);
+            dipSpeedInput.setAttribute('title', `Máximo: ${RecipesScreen.MAX_Z_SPEED_MMS} mm/s. Solo la bajada a la solución.`);
+        }
+        if (emersionSpeedInput) {
+            emersionSpeedInput.setAttribute('max', RecipesScreen.MAX_Z_SPEED_MMS);
+            emersionSpeedInput.setAttribute('title', `Máximo: ${RecipesScreen.MAX_Z_SPEED_MMS} mm/s. Vacío = subir a la misma velocidad de la inmersión.`);
         }
 
         for (let i = 1; i <= 4; i++) {
@@ -752,7 +725,7 @@ class RecipesScreen {
         this.setRecipeMode(!!(recipe && recipe.is_staged));
 
         // Agregar validación en tiempo real
-        this.setupFormValidation(form, maxVelocityY, maxAccelY);
+        this.setupFormValidation(form);
 
         // NUEVO: Configurar autocálculo de duración
         this.setupAutoDurationCalculation(form);
@@ -777,7 +750,8 @@ class RecipesScreen {
         // Lista de IDs que afectan a la duración
         const triggerIds = [
             'recipe-dipping-wait0', 'recipe-dipping-wait1', 'recipe-dipping-wait2', 'recipe-dipping-wait3',
-            'recipe-transfer-wait', 'recipe-cycles', 'recipe-dip-speed', 'recipe-dipping-length'
+            'recipe-transfer-wait', 'recipe-cycles', 'recipe-dip-speed', 'recipe-emersion-speed',
+            'recipe-dipping-length'
         ];
 
         const updateFn = () => this.updateAutoDuration(form);
@@ -816,10 +790,14 @@ class RecipesScreen {
         
         // Tiempo de movimiento (estimado)
         const dipSpeed = parseFloat(form.querySelector('#recipe-dip-speed').value) || 10; // mm/s
+        // Vacío o 0 = sube a la misma velocidad con la que bajó.
+        const emersionSpeed = parseFloat(form.querySelector('#recipe-emersion-speed').value) || dipSpeed;
         const dippingLength = parseFloat(form.querySelector('#recipe-dipping-length').value) || 50; // mm
         
-        // Tiempo de bajar y subir por cada inmersión (2 movimientos)
-        const movementTimePerDipMs = dipSpeed > 0 ? (dippingLength / dipSpeed) * 2 * 1000 : 0;
+        // Tiempo de bajar y subir por cada inmersión (2 movimientos, que ya no
+        // tienen por qué durar lo mismo)
+        const movementTimePerDipMs = RecipesScreen.tiempoInmersionMs(
+            dippingLength, dipSpeed, emersionSpeed);
         
         // Suma de tiempos por ciclo
         const timePerCycleMs = (
@@ -840,19 +818,16 @@ class RecipesScreen {
     /**
      * Configura validación en tiempo real para los campos del formulario
      */
-    setupFormValidation(form, maxVelocityY, maxAccelY) {
-        // Los cuatro campos se validaban con bloques calcados que solo diferían en
+    setupFormValidation(form) {
+        // Los tres campos se validaban con bloques calcados que solo diferían en
         // el máximo y la unidad, y fue justo ahí donde las unidades se desviaron:
-        // los dos de mm/s se comparaban contra topes en rpm. Con la tabla quedan
-        // a la vista de un vistazo.
-        // Los dos primeros son los campos heredados en rpm, configurables desde la
-        // base; los dos últimos llegan al firmware en mm/s y su tope lo fija la
-        // mecánica del eje, no la configuración.
+        // los de mm/s se comparaban contra topes en rpm. Con la tabla quedan a la
+        // vista de un vistazo. Las tres velocidades llegan al firmware en mm/s y
+        // su tope lo fija la mecánica del eje, no la configuración.
         const limites = [
-            ['#recipe-velocity-y', maxVelocityY, 'rpm'],
-            ['#recipe-accel-y', maxAccelY, 'rpm/s'],
             ['#recipe-transfer-speed', RecipesScreen.MAX_TRANSFER_SPEED_MMS, 'mm/s'],
-            ['#recipe-dip-speed', RecipesScreen.MAX_DIP_SPEED_MMS, 'mm/s']
+            ['#recipe-dip-speed', RecipesScreen.MAX_Z_SPEED_MMS, 'mm/s'],
+            ['#recipe-emersion-speed', RecipesScreen.MAX_Z_SPEED_MMS, 'mm/s']
         ];
 
         limites.forEach(([selector, maximo, unidad]) => {
@@ -879,7 +854,7 @@ class RecipesScreen {
      * y de esta tabla salen tanto el formulario como la lectura de vuelta en
      * saveRecipe. Agregar un parámetro a la receta es agregar una fila.
      */
-    static stageFieldGroups(maxVelocityY, maxAccelY) {
+    static stageFieldGroups() {
         return [
             {
                 title: 'Tiempos de Inmersión (ms)',
@@ -901,13 +876,7 @@ class RecipesScreen {
                       opciones: [['false', 'Desactivado'], ['true', 'Activado']] },
                     { key: 'temperature', label: 'Temperatura (°C)', step: 0.1 },
                     { key: 'humidityOffset', label: 'Offset Humedad (%)', step: 0.1 },
-                    { key: 'temperatureOffset', label: 'Offset Temperatura (°C)', step: 0.1 },
-                    { key: 'velocityX', label: 'Velocidad Motor X (rpm)', step: 0.1 },
-                    { key: 'velocityY', label: 'Velocidad Motor Y (rpm)', step: 0.1,
-                      max: maxVelocityY, unidad: 'rpm' },
-                    { key: 'accelX', label: 'Aceleración Motor X (rpm/s)', step: 0.1 },
-                    { key: 'accelY', label: 'Aceleración Motor Y (rpm/s)', step: 0.1,
-                      max: maxAccelY, unidad: 'rpm/s' }
+                    { key: 'temperatureOffset', label: 'Offset Temperatura (°C)', step: 0.1 }
                 ]
             },
             {
@@ -929,7 +898,10 @@ class RecipesScreen {
                     { key: 'transferSpeed', label: 'Velocidad Transferencia Y (mm/s)', step: 0.1,
                       max: RecipesScreen.MAX_TRANSFER_SPEED_MMS, unidad: 'mm/s' },
                     { key: 'dipSpeed', label: 'Velocidad Inmersión Z (mm/s)', step: 0.1,
-                      max: RecipesScreen.MAX_DIP_SPEED_MMS, unidad: 'mm/s' },
+                      max: RecipesScreen.MAX_Z_SPEED_MMS, unidad: 'mm/s' },
+                    { key: 'emersionSpeed', label: 'Velocidad Emersión Z (mm/s)', step: 0.1,
+                      max: RecipesScreen.MAX_Z_SPEED_MMS, unidad: 'mm/s',
+                      placeholder: 'Igual que inmersión' },
                     { key: 'posY1', label: 'Vaso 1 (mm)', step: 0.1, min: 0,
                       max: RecipesScreen.MAX_VESSEL_POSITION_MM, unidad: 'mm', placeholder: 'Calibrada' },
                     { key: 'posY2', label: 'Vaso 2 (mm)', step: 0.1, min: 0,
@@ -944,6 +916,17 @@ class RecipesScreen {
     }
 
     /**
+     * Lo que tarda una inmersión completa, en milisegundos: bajar el sustrato a
+     * la solución y volver a sacarlo. Los dos recorridos miden lo mismo pero ya
+     * no tienen por qué durar lo mismo, así que se suman por separado en vez de
+     * multiplicar uno por dos.
+     */
+    static tiempoInmersionMs(dippingLength, dipSpeed, emersionSpeed) {
+        if (dipSpeed <= 0 || emersionSpeed <= 0) return 0;
+        return (dippingLength / dipSpeed + dippingLength / emersionSpeed) * 1000;
+    }
+
+    /**
      * Duración estimada de un juego de parámetros, en milisegundos. Es el mismo
      * cálculo que ya hacía el formulario simple; se saca aparte porque una
      * receta por etapas necesita aplicarlo etapa por etapa.
@@ -954,10 +937,14 @@ class RecipesScreen {
         // campo estaba vacío: sin ellos una etapa recién creada saldría con
         // duración 0 y el servidor la rechazaría (duration tiene mínimo 1).
         const dipSpeed = parseFloat(p.dipSpeed) || 10;          // mm/s
+        // Vacío o 0 = sube a la misma velocidad con la que bajó.
+        const emersionSpeed = parseFloat(p.emersionSpeed) || dipSpeed;
         const dippingLength = parseFloat(p.dippingLength) || 50; // mm
 
-        // Bajar y subir en cada inmersión: dos recorridos
-        const movementTimePerDipMs = dipSpeed > 0 ? (dippingLength / dipSpeed) * 2 * 1000 : 0;
+        // Bajar y subir en cada inmersión: dos recorridos, que ya no tienen por
+        // qué durar lo mismo.
+        const movementTimePerDipMs = RecipesScreen.tiempoInmersionMs(
+            dippingLength, dipSpeed, emersionSpeed);
 
         const timePerCycleMs = (
             (parseInt(p.dippingWait0) || 0) +
@@ -1013,9 +1000,7 @@ class RecipesScreen {
         const form = document.getElementById('recipe-form');
         if (!form) return this.emptyStage();
 
-        const config = this.systemConfig || {};
-        const grupos = RecipesScreen.stageFieldGroups(
-            config.max_velocity_y || 1000, config.max_accel_y || 100);
+        const grupos = RecipesScreen.stageFieldGroups();
 
         const etapa = { name: '' };
         grupos.forEach(grupo => {
@@ -1125,10 +1110,7 @@ class RecipesScreen {
     }
 
     stageCardHtml(indice, etapa, total) {
-        const config = this.systemConfig || {};
-        const maxVelocityY = config.max_velocity_y || 1000;
-        const maxAccelY = config.max_accel_y || 100;
-        const grupos = RecipesScreen.stageFieldGroups(maxVelocityY, maxAccelY);
+        const grupos = RecipesScreen.stageFieldGroups();
         const cuerpoId = `stage-body-${indice}`;
         const abierto = total === 1 || indice === this.stageAbierta;
 
@@ -1314,21 +1296,18 @@ class RecipesScreen {
      * Mismos topes que valida el formulario simple, aplicados a una etapa.
      * Devuelve el motivo del rechazo o null si la etapa es válida.
      */
-    validateStageLimits(etapa, maxVelocityY, maxAccelY) {
+    validateStageLimits(etapa) {
         if ((etapa.cycles || 0) < 1) {
             return 'la cantidad de ciclos debe ser al menos 1';
-        }
-        if ((etapa.velocityY || 0) > maxVelocityY) {
-            return `la velocidad Y no puede exceder ${maxVelocityY} rpm`;
-        }
-        if ((etapa.accelY || 0) > maxAccelY) {
-            return `la aceleración Y no puede exceder ${maxAccelY} rpm/s`;
         }
         if ((etapa.transferSpeed || 0) > RecipesScreen.MAX_TRANSFER_SPEED_MMS) {
             return `la velocidad de transferencia Y no puede exceder ${RecipesScreen.MAX_TRANSFER_SPEED_MMS} mm/s`;
         }
-        if ((etapa.dipSpeed || 0) > RecipesScreen.MAX_DIP_SPEED_MMS) {
-            return `la velocidad de inmersión Z no puede exceder ${RecipesScreen.MAX_DIP_SPEED_MMS} mm/s`;
+        if ((etapa.dipSpeed || 0) > RecipesScreen.MAX_Z_SPEED_MMS) {
+            return `la velocidad de inmersión Z no puede exceder ${RecipesScreen.MAX_Z_SPEED_MMS} mm/s`;
+        }
+        if ((etapa.emersionSpeed || 0) > RecipesScreen.MAX_Z_SPEED_MMS) {
+            return `la velocidad de emersión Z no puede exceder ${RecipesScreen.MAX_Z_SPEED_MMS} mm/s`;
         }
         for (let i = 1; i <= 4; i++) {
             const mm = etapa[`posY${i}`] || 0;
@@ -1350,11 +1329,6 @@ class RecipesScreen {
             return;
         }
 
-        // Obtener configuraciones del sistema para validar límites
-        const config = this.systemConfig || {};
-        const maxVelocityY = config.max_velocity_y || 1000;
-        const maxAccelY = config.max_accel_y || 100;
-
         // Receta por etapas: los parámetros no salen de los campos de arriba
         // (están ocultos y vacíos) sino de la lista de etapas. El resumen que se
         // guarda en recipe_parameters lo calcula el servidor.
@@ -1372,7 +1346,7 @@ class RecipesScreen {
             }
 
             for (let i = 0; i < etapas.length; i++) {
-                const problema = this.validateStageLimits(etapas[i], maxVelocityY, maxAccelY);
+                const problema = this.validateStageLimits(etapas[i]);
                 if (problema) {
                     this.app.showError(`Etapa ${i + 1}: ${problema}`);
                     // Abrir la etapa que falla: con ocho tarjetas plegadas, decir
@@ -1393,29 +1367,15 @@ class RecipesScreen {
             return;
         }
 
-        // Validar límites antes de guardar.
-        // velocityY / accelY son los campos heredados en rpm, que solo se guardan
-        // en la base y no llegan al Arduino.
-        const velocityY = parseFloat(formData.get('velocityY')) || 0;
-        const accelY = parseFloat(formData.get('accelY')) || 0;
-        // transferSpeed y dipSpeed sí llegan al firmware, y van en mm/s. Antes se
-        // validaban como si fueran la velocidad y la aceleración del eje Z en rpm,
-        // contra un tope de 100: eso rechazaba valores perfectamente válidos y
-        // dejaba pasar otros que el eje no puede dar.
+        // Validar límites antes de guardar. Las tres velocidades llegan al
+        // firmware y van en mm/s. Antes se validaban como si fueran la velocidad y
+        // la aceleración del eje Z en rpm, contra un tope de 100: eso rechazaba
+        // valores perfectamente válidos y dejaba pasar otros que el eje no puede dar.
         const transferSpeed = parseFloat(formData.get('transferSpeed')) || 0;
         const dipSpeed = parseFloat(formData.get('dipSpeed')) || 0;
-
-        if (velocityY > maxVelocityY) {
-            this.app.showError(`La velocidad Y no puede exceder ${maxVelocityY} rpm`);
-            form.querySelector('#recipe-velocity-y').focus();
-            return;
-        }
-
-        if (accelY > maxAccelY) {
-            this.app.showError(`La aceleración Y no puede exceder ${maxAccelY} rpm/s`);
-            form.querySelector('#recipe-accel-y').focus();
-            return;
-        }
+        // Vacío = 0 = subir a la misma velocidad de la inmersión, que es como se
+        // comportaba el sistema antes de que este campo existiera.
+        const emersionSpeed = parseFloat(formData.get('emersionSpeed')) || 0;
 
         if (transferSpeed > RecipesScreen.MAX_TRANSFER_SPEED_MMS) {
             this.app.showError(`La velocidad de transferencia Y no puede exceder ${RecipesScreen.MAX_TRANSFER_SPEED_MMS} mm/s`);
@@ -1423,9 +1383,15 @@ class RecipesScreen {
             return;
         }
 
-        if (dipSpeed > RecipesScreen.MAX_DIP_SPEED_MMS) {
-            this.app.showError(`La velocidad de inmersión Z no puede exceder ${RecipesScreen.MAX_DIP_SPEED_MMS} mm/s`);
+        if (dipSpeed > RecipesScreen.MAX_Z_SPEED_MMS) {
+            this.app.showError(`La velocidad de inmersión Z no puede exceder ${RecipesScreen.MAX_Z_SPEED_MMS} mm/s`);
             form.querySelector('#recipe-dip-speed').focus();
+            return;
+        }
+
+        if (emersionSpeed > RecipesScreen.MAX_Z_SPEED_MMS) {
+            this.app.showError(`La velocidad de emersión Z no puede exceder ${RecipesScreen.MAX_Z_SPEED_MMS} mm/s`);
+            form.querySelector('#recipe-emersion-speed').focus();
             return;
         }
 
@@ -1451,10 +1417,6 @@ class RecipesScreen {
             parameters: {
                 duration: parseInt(formData.get('duration')) || 0,
                 temperature: parseFloat(formData.get('temperature')) || 0,
-                velocityX: parseFloat(formData.get('velocityX')) || 0,
-                velocityY: parseFloat(formData.get('velocityY')) || 0,
-                accelX: parseFloat(formData.get('accelX')) || 0,
-                accelY: parseFloat(formData.get('accelY')) || 0,
                 humidityOffset: parseFloat(formData.get('humidityOffset')) || 0,
                 temperatureOffset: parseFloat(formData.get('temperatureOffset')) || 0,
                 // Tiempos de inmersión (en milisegundos)
@@ -1475,6 +1437,8 @@ class RecipesScreen {
                 dippingLength: parseFloat(formData.get('dippingLength')) || 0,
                 transferSpeed: transferSpeed,
                 dipSpeed: dipSpeed,
+                // 0 = subir a la misma velocidad de bajada
+                emersionSpeed: emersionSpeed,
                 // Posición de cada vaso desde el home de Y, en mm.
                 // 0 = usar la geometría calibrada de la máquina.
                 posY1: posicionesVaso[0],
@@ -1596,8 +1560,10 @@ class RecipesScreen {
     async executeSelectedRecipe() {
         if (!this.selectedRecipe) return;
 
-        // Verificar si hay un proceso ejecutándose antes de intentar iniciar
-        if (this.processStatus === 'running' || this.processStatus === 'paused') {
+        // Verificar si hay un proceso ejecutándose antes de intentar iniciar.
+        // Se pregunta al estado global, no al de la pantalla, porque este puede
+        // llevar hasta un segundo de retraso.
+        if (this.app.hayProcesoEnCurso()) {
             this.app.showError('Ya hay un proceso ejecutándose. Debe detenerlo antes de iniciar uno nuevo.');
             // Navegar a la pantalla de proceso para que el usuario pueda detenerlo
             setTimeout(() => {
@@ -1709,6 +1675,7 @@ class RecipesScreen {
         // Remover modal anterior si existe
         const existingModal = document.getElementById('delete-confirmation-modal');
         if (existingModal) {
+            bootstrap.Modal.getInstance(existingModal)?.dispose();
             existingModal.remove();
         }
 
@@ -1893,22 +1860,6 @@ class RecipesScreen {
                                           <input type="number" class="form-control" name="temperature" id="recipe-temperature" step="0.1">
                                       </div>
                                       <div class="col-md-6">
-                                          <label class="form-label">Velocidad Motor X (rpm)</label>
-                                          <input type="number" class="form-control" name="velocityX" id="recipe-velocity-x" step="0.1">
-                                      </div>
-                                      <div class="col-md-6">
-                                          <label class="form-label">Velocidad Motor Y (rpm)</label>
-                                          <input type="number" class="form-control" name="velocityY" id="recipe-velocity-y" step="0.1">
-                                      </div>
-                                      <div class="col-md-6">
-                                          <label class="form-label">Aceleración Motor X (rpm/s)</label>
-                                          <input type="number" class="form-control" name="accelX" id="recipe-accel-x" step="0.1">
-                                      </div>
-                                      <div class="col-md-6">
-                                          <label class="form-label">Aceleración Motor Y (rpm/s)</label>
-                                          <input type="number" class="form-control" name="accelY" id="recipe-accel-y" step="0.1">
-                                      </div>
-                                      <div class="col-md-6">
                                           <label class="form-label">Offset Humedad (%)</label>
                                           <input type="number" class="form-control" name="humidityOffset" id="recipe-humidity-offset" step="0.1">
                                       </div>
@@ -2015,6 +1966,10 @@ class RecipesScreen {
                                       <div class="col-md-6">
                                           <label class="form-label">Velocidad Inmersión Z (mm/s)</label>
                                           <input type="number" class="form-control" name="dipSpeed" id="recipe-dip-speed" step="0.1">
+                                      </div>
+                                      <div class="col-md-6">
+                                          <label class="form-label">Velocidad Emersión Z (mm/s)</label>
+                                          <input type="number" class="form-control" name="emersionSpeed" id="recipe-emersion-speed" step="0.1" placeholder="Igual que la inmersión">
                                       </div>
 
                                       <div class="col-12">

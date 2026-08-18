@@ -6,12 +6,21 @@
 class ProcessScreen {
     constructor(app) {
         this.app = app;
-        this.currentProcess = null;
+        // Id del proceso que se está mostrando. Antes solo se guardaba el
+        // estado ('running'/'paused'), así que si terminaba una corrida y
+        // empezaba otra la pantalla no se enteraba: el texto del estado era el
+        // mismo y todas las comprobaciones eran `currentStatus !== status`.
+        this.currentProcessId = null;
         this.handleStageChanged = this.handleStageChanged.bind(this);
         this.timer = null;
         this.currentStatus = 'stopped'; // Almacenar el estado actual
         this.startTime = null; // Inicializar startTime
         this.isTimerRunning = false; // Flag para evitar múltiples timers
+        // El cronómetro se congela durante la pausa, así que hay que descontar
+        // lo que duró: sin esto, al reanudar el número saltaba de golpe con
+        // todo el tiempo que la máquina estuvo parada.
+        this.pausedAccumMs = 0;
+        this.pausedSinceMs = null;
         this.init();
     }
 
@@ -81,6 +90,8 @@ class ProcessScreen {
 
             if (result && result.success) {
                 const status = result.status || 'stopped';
+                const processId = result.process ? result.process.id : null;
+                const terminalStates = ['stopped', 'completed', 'cancelled', 'failed', 'error'];
 
                 // Calcular desfase de reloj si el servidor proporciona su hora actual
                 let clockOffset = 0;
@@ -90,51 +101,56 @@ class ProcessScreen {
                     clockOffset = serverTime - clientTime;
                 }
 
-                // Si el servidor reporta un estado terminal pero nosotros creemos que sigue corriendo/pausado localmente,
-                // debemos forzar la detención y actualizar el estado
-                const terminalStates = ['stopped', 'completed', 'cancelled', 'failed', 'error'];
-                if (terminalStates.includes(status)) {
-                    if (this.currentStatus === 'running' || this.currentStatus === 'paused') {
-                        console.log(`El servidor indica que el proceso ha finalizado (${status}). Deteniendo timer local...`);
-                        this.forceStopTimer();
-                        this.hideTimer();
-                        this.stopTimer();
+                // El servidor dice que ya no hay proceso: se limpia todo. Antes
+                // esto solo entraba si localmente creíamos estar corriendo, así
+                // que un estado a medias se quedaba pegado en la pantalla.
+                if (terminalStates.includes(status) || !processId) {
+                    if (this.currentStatus !== status || this.currentProcessId !== null) {
+                        console.log(`El servidor indica que no hay proceso en curso (${status}). Limpiando pantalla...`);
+                        this.clearProcessState();
                         this.updateProcessStatus(status);
-                        return;
                     }
-                }
-
-                // CRÍTICO: Si ya tenemos un timer ejecutándose localmente y el servidor coincide en que está ejecutándose,
-                // NO iniciar otro sin importar lo que diga el servidor
-                if (this.isTimerRunning && status === 'running') {
                     return;
                 }
 
-                if ((status === 'running' || status === 'paused') && result.process) {
-                    if (this.currentStatus !== status) {
-                        this.updateProcessStatus(status);
-                        this.showTimer();
+                // Corrida distinta de la que teníamos: se adopta desde cero. Es
+                // el caso que dejaba rastros del proceso anterior, porque con el
+                // mismo texto de estado no se refrescaba nada.
+                if (processId !== this.currentProcessId) {
+                    console.log(`Proceso nuevo detectado (id ${processId}). Sincronizando con el servidor...`);
+                    this.clearProcessState();
+                    this.currentProcessId = processId;
+                    // El arranque real lo tiene el servidor. Se corrige por el
+                    // desfase de reloj para que el cronómetro no salga torcido
+                    // si el PC va desajustado respecto a MySQL.
+                    // El transcurrido preferido es el que calcula MySQL con
+                    // TIMESTAMPDIFF: no depende ni de la zona horaria del motor
+                    // ni del reloj del equipo. El startTime crudo queda como
+                    // respaldo, corregido por el desfase de reloj.
+                    const inicioServidor = result.process.startTime
+                        ? new Date(result.process.startTime).getTime()
+                        : null;
+                    this.startTime = result.process.elapsedSeconds != null
+                        ? Date.now() - result.process.elapsedSeconds * 1000
+                        : (inicioServidor ? inicioServidor - clockOffset : Date.now());
+                }
 
-                        // Sincronizar startTime si no lo tenemos o si cambió
-                        if (!this.startTime) {
-                            this.startTime = Date.now();
-                            console.log('Sincronizado startTime (Tiempo local):', new Date(this.startTime).toISOString());
-                        }
+                // Se sincroniza siempre contra el servidor, no solo cuando el
+                // texto cambia: el servidor reconcilia el estado con la placa y
+                // es quien tiene la razón sobre si está corriendo o pausado.
+                if (this.currentStatus !== status) {
+                    this.updateProcessStatus(status);
+                }
 
-                        // Si está corriendo, iniciar timer. Si está pausado, asegurar que el intervalo esté detenido.
-                        if (status === 'running' && !this.isTimerRunning) {
-                            this.startTimer();
-                        } else if (status === 'paused') {
-                            this.forceStopTimer();
-                            this.updateTimerDisplay();
-                        }
-                    }
-                } else {
-                    if (this.currentStatus !== 'running' && this.currentStatus !== 'paused') {
-                        this.updateProcessStatus(status);
-                        this.hideTimer();
-                        this.stopTimer();
-                    }
+                this.showTimer();
+
+                if (status === 'running') {
+                    this.marcarReanudado();
+                    if (!this.isTimerRunning) this.startTimer();
+                } else if (status === 'paused') {
+                    this.marcarPausado();
+                    this.forceStopTimer();
+                    this.updateTimerDisplay();
                 }
             }
         } catch (error) {
@@ -174,6 +190,14 @@ class ProcessScreen {
                 return;
             }
 
+            // Y que no haya ya una corriendo. El servidor responde 409 de todas
+            // formas, pero cortar aquí evita limpiar el cronómetro de la receta
+            // que sí está en curso por un arranque que iba a ser rechazado.
+            if (this.app.hayProcesoEnCurso()) {
+                this.app.showError('Ya hay un proceso ejecutándose. Debe detenerlo antes de iniciar uno nuevo.');
+                return;
+            }
+
             // CRÍTICO: Limpiar COMPLETAMENTE cualquier timer existente ANTES de iniciar
             console.log('Iniciando proceso - Limpiando timers anteriores...');
             this.forceStopTimer();
@@ -199,6 +223,9 @@ class ProcessScreen {
                 // CRÍTICO: Establecer nuevo tiempo de inicio DESPUÉS de que el servidor confirme
                 // Usar el tiempo actual del cliente para evitar problemas de sincronización
                 // NO usar el startTime del servidor para procesos nuevos iniciados desde aquí
+                this.pausedAccumMs = 0;
+                this.pausedSinceMs = null;
+                this.currentProcessId = result.processId || null;
                 this.startTime = Date.now();
 
                 console.log('Nuevo proceso iniciado con startTime:', new Date(this.startTime).toISOString());
@@ -237,6 +264,7 @@ class ProcessScreen {
                 this.updateProcessStatus('paused');
 
                 // Pausar el timer pero mantenerlo visible
+                this.marcarPausado();
                 this.forceStopTimer();
             }
 
@@ -257,6 +285,7 @@ class ProcessScreen {
             if (result && result.success) {
                 this.app.showSuccess(result.message || 'Proceso reanudado');
                 this.updateProcessStatus('running');
+                this.marcarReanudado();
                 // Si el timer no está ejecutándose, iniciarlo
                 // Si ya está ejecutándose, no hacer nada (el tiempo ya está correcto)
                 if (!this.isTimerRunning) {
@@ -285,11 +314,7 @@ class ProcessScreen {
 
                     // CRÍTICO: Detener y ocultar el timer COMPLETAMENTE
                     console.log('Deteniendo proceso - Limpiando timers...');
-                    this.forceStopTimer();
-                    this.hideTimer();
-
-                    // Asegurarse de que startTime esté completamente reseteado
-                    this.startTime = null;
+                    this.clearProcessState();
 
                     // NO recargar el estado del servidor aquí porque puede interferir
                     // si el usuario inicia un nuevo proceso inmediatamente después
@@ -450,13 +475,46 @@ class ProcessScreen {
             return;
         }
 
-        const elapsed = Math.max(0, Date.now() - this.startTime);
+        // El tiempo que estuvo en pausa no cuenta como tiempo de proceso.
+        const enPausa = this.pausedSinceMs !== null ? Date.now() - this.pausedSinceMs : 0;
+        const elapsed = Math.max(0, Date.now() - this.startTime - this.pausedAccumMs - enPausa);
         const hours = Math.floor(elapsed / 3600000);
         const minutes = Math.floor((elapsed % 3600000) / 60000);
         const seconds = Math.floor((elapsed % 60000) / 1000);
 
         timerDisplay.textContent =
             `${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
+    }
+
+    /**
+     * Deja la pantalla como si no hubiera proceso: sin cronómetro, sin id, sin
+     * etapa y sin el tiempo de pausa acumulado. Todo junto en un sitio porque
+     * olvidarse de uno de ellos es lo que dejaba rastros de la corrida anterior.
+     */
+    clearProcessState() {
+        this.forceStopTimer();
+        this.hideTimer();
+        this.resetTimerDisplay();
+        this.startTime = null;
+        this.currentProcessId = null;
+        this.pausedAccumMs = 0;
+        this.pausedSinceMs = null;
+        this.updateStageBadge(null);
+    }
+
+    /** Abre el conteo de la pausa. Idempotente: pausar dos veces no suma dos. */
+    marcarPausado() {
+        if (this.pausedSinceMs === null) {
+            this.pausedSinceMs = Date.now();
+        }
+    }
+
+    /** Cierra la pausa en curso y la acumula para descontarla del cronómetro. */
+    marcarReanudado() {
+        if (this.pausedSinceMs !== null) {
+            this.pausedAccumMs += Date.now() - this.pausedSinceMs;
+            this.pausedSinceMs = null;
+        }
     }
 
     forceStopTimer() {
@@ -479,17 +537,6 @@ class ProcessScreen {
         if (timerDisplay) {
             timerDisplay.textContent = '00:00:00';
         }
-    }
-
-    stopTimer() {
-        // Usar el método de limpieza forzada
-        this.forceStopTimer();
-        this.resetTimerDisplay();
-
-        // CRÍTICO: Resetear completamente el tiempo de inicio
-        this.startTime = null;
-
-        console.log('Timer detenido completamente');
     }
 
     static getTemplate() {

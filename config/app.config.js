@@ -19,11 +19,13 @@ const pkg = require('../package.json');
  *   { "database": { "password": "loQueSea" }, "arduino": { "port": "COM3" } }
  */
 function loadLocalOverrides() {
-  if (!process.env.USER_DATA_PATH) {
-    return {};
-  }
-
-  const file = path.join(process.env.USER_DATA_PATH, 'silar-config.json');
+  // En la app instalada el archivo vive en la carpeta de datos del usuario; en
+  // desarrollo (npm run web / npm run dev sin empaquetar) se busca en la raíz
+  // del repo, que está en .gitignore. Así cada equipo apunta a su motor -aquí
+  // MySQL en Docker, en MTY XAMPP- sin tocar el código ni el default.
+  const file = process.env.USER_DATA_PATH
+    ? path.join(process.env.USER_DATA_PATH, 'silar-config.json')
+    : path.join(__dirname, '..', 'silar-config.json');
 
   try {
     if (!fs.existsSync(file)) {

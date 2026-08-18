@@ -87,8 +87,15 @@ valor por defecto. El archivo vive en la carpeta de datos del usuario, así que
 **sobrevive a las actualizaciones**. Si tiene un JSON inválido se ignora y se
 avisa en el log, sin impedir el arranque.
 
-Para desarrollo con MySQL en Docker en vez de XAMPP, lo mismo se puede hacer con
-variables de entorno: `DB_PASSWORD`, `DB_PORT`, `DB_HOST`.
+En desarrollo (`npm run web`, `npm run dev`) el mismo archivo se busca en la
+raiz del repositorio, que esta en `.gitignore`. Ahi es donde se apunta a MySQL
+en Docker en vez de XAMPP:
+
+```json
+{ "database": { "password": "12345" } }
+```
+
+Tambien sirven las variables de entorno `DB_PASSWORD`, `DB_PORT`, `DB_HOST`.
 
 ## Diagnóstico
 

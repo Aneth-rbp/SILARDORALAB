@@ -317,7 +317,7 @@ class MonitoringScreen {
             // Estas dos van en mm/s, no en rpm: es la unidad en la que se escriben
             // en la receta y la que el firmware convierte a pasos del motor
             { name: 'transferSpeed', label: 'Velocidad Y', unit: 'mm/s', category: 'speed', description: 'Velocidad Y de transferencia entre vasos, también en el regreso al vaso 1' },
-            { name: 'dipSpeed', label: 'Velocidad Z', unit: 'mm/s', category: 'speed', description: 'Velocidad Z de inmersión y de emersión del sustrato' },
+            { name: 'dipSpeed', label: 'Velocidad Z', unit: 'mm/s', category: 'speed', description: 'Velocidad Z de bajada del sustrato a la solución; la subida tiene su propia velocidad en la receta' },
             { name: 'setStir1', label: 'Velocidad Removedor 1', unit: 'rpm', category: 'speed', description: 'Velocidad del removedor en la parrilla 1' },
             { name: 'setStir2', label: 'Velocidad Removedor 2', unit: 'rpm', category: 'speed', description: 'Velocidad del removedor en la parrilla 2' },
             { name: 'setStir3', label: 'Velocidad Removedor 3', unit: 'rpm', category: 'speed', description: 'Velocidad del removedor en la parrilla 3' },

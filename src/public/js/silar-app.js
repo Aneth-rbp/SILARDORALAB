@@ -21,6 +21,18 @@ class SilarApp {
             elapsedTime: 0,
             variables: {}
         };
+        // Estado del proceso a nivel de aplicacion, no de pantalla. Antes cada
+        // pantalla preguntaba por su cuenta y ninguna sabia nada estando fuera
+        // de Proceso: por eso ni la cabecera podia mostrar el avance ni se
+        // podia impedir entrar a Control Manual con la maquina trabajando.
+        this.procesoEnCurso = {
+            status: 'stopped',
+            processId: null,
+            recipeName: null,
+            startTime: null,      // epoch del cliente, derivado del transcurrido del servidor
+            cycle: null,
+            totalCycles: null
+        };
         this.activeScreenInstance = null; // Instancia de la pantalla activa
         
         // Check authentication first
@@ -74,6 +86,8 @@ class SilarApp {
         
         this.loadDashboard();
         
+        this.iniciarSeguimientoDelProceso();
+
         // Verificar estado cada 30 segundos
         setInterval(() => this.checkSystemStatus(), 30000);
         
@@ -289,6 +303,22 @@ class SilarApp {
 
             this.socket.on('process-update', (data) => {
                 this.updateProcessData(data);
+            });
+
+            // Ciclo en curso segun el Arduino. Llega null cuando la corrida
+            // termina, se detiene o entra el paro de emergencia.
+            this.socket.on('process-cycle', (ciclo) => {
+                this.procesoEnCurso.cycle = ciclo?.cycle ?? null;
+                if (ciclo?.totalCycles) {
+                    this.procesoEnCurso.totalCycles = ciclo.totalCycles;
+                }
+                this.pintarIndicadorDeProceso();
+            });
+
+            // El servidor avisa en cuanto la placa arranca o termina algo: sin
+            // esto la cabecera tardaria hasta 5 segundos en enterarse.
+            this.socket.on('process-status-update', () => {
+                this.refrescarEstadoDelProceso();
             });
 
             // Parámetros de la receta en curso: sus claves ya coinciden con los
@@ -579,6 +609,14 @@ class SilarApp {
     }
 
     navigateToScreen(screenName, params = {}) {
+        // El control manual mueve los motores directamente. Entrar ahi con una
+        // receta corriendo significaria pelearse con la placa por el mismo
+        // hardware, asi que se bloquea la pantalla mientras haya proceso.
+        if (screenName === 'manual' && this.hayProcesoEnCurso()) {
+            this.showError('Hay una receta en proceso. Deten o termina el proceso antes de entrar al Control Manual.');
+            return;
+        }
+
         // Validar permisos para pantallas restringidas
         if (screenName === 'configuration') {
             if (this.userSession?.role !== 'admin') {
@@ -604,11 +642,145 @@ class SilarApp {
                 this.activeScreenInstance = null;
             }
 
+            this.limpiarModalesHuerfanos();
+
             this.currentScreen = screenName;
             this.updateBreadcrumb(screenName);
             this.loadScreen(screenName, params);
             this.hideLoading();
         }, 300);
+    }
+
+    // =====================================================
+    // Seguimiento del proceso a nivel de aplicacion
+    // =====================================================
+
+    /**
+     * Mantiene vivo el estado del proceso pase lo que pase en pantalla.
+     *
+     * Son dos relojes distintos a proposito: uno consulta al servidor cada 5
+     * segundos (quien manda es la base de datos, no lo que creamos aqui) y el
+     * otro solo repinta el cronometro cada segundo sin pedir nada por red.
+     */
+    iniciarSeguimientoDelProceso() {
+        if (this.isDemoMode) return;
+
+        this.refrescarEstadoDelProceso();
+        setInterval(() => this.refrescarEstadoDelProceso(), 5000);
+        setInterval(() => this.pintarIndicadorDeProceso(), 1000);
+    }
+
+    async refrescarEstadoDelProceso() {
+        try {
+            const resultado = await this.apiCall('/process/status');
+            if (!resultado || !resultado.success) return;
+
+            const proceso = resultado.process;
+            const activo = proceso && (resultado.status === 'running' || resultado.status === 'paused');
+
+            if (!activo) {
+                this.procesoEnCurso = {
+                    status: resultado.status || 'stopped',
+                    processId: null,
+                    recipeName: null,
+                    startTime: null,
+                    cycle: null,
+                    totalCycles: null
+                };
+                this.pintarIndicadorDeProceso();
+                return;
+            }
+
+            // El transcurrido lo calcula MySQL, asi que el cronometro no depende
+            // ni del reloj del equipo ni de la zona horaria del motor.
+            const transcurridoMs = (proceso.elapsedSeconds || 0) * 1000;
+
+            this.procesoEnCurso = {
+                status: resultado.status,
+                processId: proceso.id,
+                recipeName: proceso.recipeName || null,
+                startTime: Date.now() - transcurridoMs,
+                // El ciclo vivo lo manda el Arduino por socket; el sondeo no lo
+                // pisa con null si todavia no ha anunciado ninguno.
+                cycle: proceso.currentCycle ?? this.procesoEnCurso.cycle,
+                totalCycles: proceso.totalCycles || this.procesoEnCurso.totalCycles
+            };
+
+            this.pintarIndicadorDeProceso();
+        } catch (error) {
+            console.error('No se pudo consultar el estado del proceso:', error);
+        }
+    }
+
+    /** true mientras haya una receta corriendo o pausada. */
+    hayProcesoEnCurso() {
+        return this.procesoEnCurso.status === 'running' || this.procesoEnCurso.status === 'paused';
+    }
+
+    pintarIndicadorDeProceso() {
+        const indicador = document.getElementById('process-indicator');
+        if (!indicador) return;
+
+        if (!this.hayProcesoEnCurso()) {
+            indicador.classList.add('d-none');
+            indicador.classList.remove('is-running', 'is-paused');
+            return;
+        }
+
+        indicador.classList.remove('d-none');
+        indicador.classList.toggle('is-running', this.procesoEnCurso.status === 'running');
+        indicador.classList.toggle('is-paused', this.procesoEnCurso.status === 'paused');
+
+        const receta = document.getElementById('process-indicator-recipe');
+        if (receta) {
+            receta.textContent = this.procesoEnCurso.recipeName || '';
+        }
+
+        const ciclos = document.getElementById('process-indicator-cycles');
+        if (ciclos) {
+            const actual = this.procesoEnCurso.cycle ?? '--';
+            const total = this.procesoEnCurso.totalCycles ?? '--';
+            ciclos.textContent = `${actual}/${total}`;
+        }
+
+        const tiempo = document.getElementById('process-indicator-time');
+        if (tiempo) {
+            tiempo.textContent = this.formatearDuracion(
+                this.procesoEnCurso.startTime ? Date.now() - this.procesoEnCurso.startTime : 0
+            );
+        }
+    }
+
+    formatearDuracion(milisegundos) {
+        const total = Math.max(0, Math.floor(milisegundos / 1000));
+        const horas = Math.floor(total / 3600);
+        const minutos = Math.floor((total % 3600) / 60);
+        const segundos = total % 60;
+
+        return [horas, minutos, segundos]
+            .map((valor) => valor.toString().padStart(2, '0'))
+            .join(':');
+    }
+
+    /**
+     * Bootstrap monta el backdrop y marca el body aparte del markup del modal.
+     * Si el modal desaparece del DOM sin pasar por hide() -es lo que hace el
+     * destroy() de cada pantalla al cambiar de vista- nadie limpia esas dos
+     * cosas: queda un div fijo a pantalla completa que se traga todos los
+     * clicks y un body con overflow oculto. La interfaz se ve bien pero no
+     * responde: los inputs ya no se pueden enfocar y la pantalla no hace
+     * scroll. Se nota sobre todo en la pantalla tactil del laboratorio, donde
+     * el operador sale del modal tocando el menu en vez de la X.
+     */
+    limpiarModalesHuerfanos() {
+        if (document.querySelector('.modal.show')) {
+            return;
+        }
+
+        document.querySelectorAll('.modal-backdrop').forEach((backdrop) => backdrop.remove());
+        document.body.classList.remove('modal-open');
+        document.body.style.removeProperty('overflow');
+        document.body.style.removeProperty('padding-right');
     }
 
     updateBreadcrumb(screenName) {

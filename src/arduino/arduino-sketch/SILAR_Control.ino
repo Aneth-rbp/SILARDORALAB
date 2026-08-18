@@ -303,14 +303,20 @@ struct RecipeParams {
   bool exceptDripping4;
   float dipStartPosition;  // Altura máxima de Z sobre el SUELO durante la receta, en mm (0 = no usar)
   float dippingLength;     // Profundidad de cada inmersión, en mm
-  // Las dos velocidades van en mm/s, la misma unidad que el operador escribe en
+  // Las tres velocidades van en mm/s, la misma unidad que el operador escribe en
   // la receta y que aparece en la hoja de parámetros. La traducción a la unidad
   // de los motores (microsegundos entre flancos) ocurre en un solo sitio:
   // velocidadMMsAMicros(). El nombre lleva la unidad a propósito: cuando estos
   // campos se llamaban transferSpeed/dipSpeed a secas, cada capa del sistema
   // supuso una unidad distinta y las recetas corrían a la velocidad equivocada.
   float transferSpeedMMs;  // Velocidad de transferencia del eje Y, en mm/s
-  float dipSpeedMMs;       // Velocidad de inmersión y emersión del eje Z, en mm/s
+  float dipSpeedMMs;       // Velocidad de BAJADA del eje Z hacia la solución, en mm/s
+  // La emersión va aparte de la inmersión porque en SILAR es la que decide el
+  // espesor de la capa que queda adherida: sacar el sustrato despacio deja más
+  // solución que sacarlo rápido. Un 0 significa "sube a la misma velocidad con
+  // la que bajaste", que es como se comportaba el equipo antes de que este
+  // campo existiera, así que las recetas ya guardadas corren igual que siempre.
+  float emersionSpeedMMs;  // Velocidad de SUBIDA del eje Z, en mm/s (0 = usar dipSpeedMMs)
   // Posición de cada vaso medida desde el home de Y, en mm. Es un ajuste POR
   // RECETA, encima de la geometría de la máquina: sirve para un montaje en el
   // que los vasos no están igualmente separados, sin tener que recalibrar el
@@ -416,6 +422,16 @@ long velocidadMMsAMicros(float mmPorSegundo, float pasosPorMM) {
   float pasosPorSegundo = mmPorSegundo * pasosPorMM;
   if (pasosPorSegundo < 1.0f) pasosPorSegundo = 1.0f;
   return (long)(1000000.0f / (2.0f * pasosPorSegundo) + 0.5f);
+}
+
+// Velocidad con la que sube el eje Z al sacar el sustrato de la solución.
+// Se resuelve aquí y no al parsear la receta para que el 0 guardado siga
+// significando "igual que la bajada" aunque después se cambie dipSpeed: es el
+// mismo criterio que posicionVasoPasos() con las posiciones de los vasos.
+float velocidadEmersionMMs() {
+  return recipeParams.emersionSpeedMMs > 0.0f
+         ? recipeParams.emersionSpeedMMs
+         : recipeParams.dipSpeedMMs;
 }
 
 // --- Persistencia de la geometría de Y en EEPROM ---
@@ -854,6 +870,7 @@ void parsearParametrosReceta(String json) {
   // a la que venían corriendo las recetas que no traen el campo.
   recipeParams.transferSpeedMMs = 500.0f / PASOS_POR_MM_Y;  // ~6.5 mm/s
   recipeParams.dipSpeedMMs = 500.0f / PASOS_POR_MM_Z;       // 25 mm/s
+  recipeParams.emersionSpeedMMs = 0.0f;                     // 0 = igual que la bajada
   for (int i = 0; i < 4; i++) recipeParams.posVasoMM[i] = 0.0f;  // 0 = geometría de la máquina
   recipeParams.fan = false;
   
@@ -977,6 +994,19 @@ void parsearParametrosReceta(String json) {
       if (v > 0.0f) recipeParams.dipSpeedMMs = v;
     }
   }
+
+  // Emersion speed (mm/s). Opcional: si no viene, o viene en 0, la subida usa la
+  // velocidad de bajada. Eso es lo que mantiene compatibles las recetas viejas.
+  idx = json.indexOf("\"emersionSpeed\":");
+  if (idx >= 0) {
+    int start = idx + 16;
+    int end = json.indexOf(",", start);
+    if (end < 0) end = json.indexOf("}", start);
+    if (end > start) {
+      float v = json.substring(start, end).toFloat();
+      if (v > 0.0f) recipeParams.emersionSpeedMMs = v;
+    }
+  }
   
   // Posición de cada vaso en mm (posY1..posY4). Opcionales: lo que no venga, o
   // venga en 0, se resuelve con la geometría de la máquina al mover. Se leen en
@@ -1037,6 +1067,10 @@ void parsearParametrosReceta(String json) {
   Serial.print(recipeParams.dipSpeedMMs, 2);
   Serial.print("mm/s (");
   Serial.print(velocidadMMsAMicros(recipeParams.dipSpeedMMs, PASOS_POR_MM_Z));
+  Serial.print("us), EmersionSpeed=");
+  Serial.print(velocidadEmersionMMs(), 2);
+  Serial.print("mm/s (");
+  Serial.print(velocidadMMsAMicros(velocidadEmersionMMs(), PASOS_POR_MM_Z));
   Serial.print("us), TransferSpeed=");
   Serial.print(recipeParams.transferSpeedMMs, 2);
   Serial.print("mm/s (");
@@ -1282,6 +1316,7 @@ void ejecutarInmersion(long posYTarget, int tiempoEspera, int numInmersion) {
 
   // Bajar Z para inmersión (Z- baja físicamente con setPinsInverted)
   long microsDip = velocidadMMsAMicros(recipeParams.dipSpeedMMs, PASOS_POR_MM_Z);
+  long microsEmersion = velocidadMMsAMicros(velocidadEmersionMMs(), PASOS_POR_MM_Z);
   moverEjeZVelocidad(-bajadaReal, microsDip);
   
   if (!procesoActivo || procesoPausado || emergencyStop) return;
@@ -1300,7 +1335,7 @@ void ejecutarInmersion(long posYTarget, int tiempoEspera, int numInmersion) {
   // Subir EXACTAMENTE lo que realmente bajó, leyendo la posición real en vez de
   // la solicitada: si el límite virtual o un switch recortó el descenso, esto
   // evita subir de más y chocar arriba.
-  moverEjeZVelocidad(zAntesDeBajar - posZ, microsDip);
+  moverEjeZVelocidad(zAntesDeBajar - posZ, microsEmersion);
   
   Serial.print("INMERSION_COMPLETADA: Y");
   Serial.println(numInmersion);

@@ -110,6 +110,8 @@ const RESPONSE_PATTERNS = {
     POSITION_Z: /^Z:\s*(-?\d+)$/,
     // "ETAPA_INICIADA: 2/3 Ciclos=6" -> etapa en curso y total de etapas.
     ETAPA: /^ETAPA_(INICIADA|COMPLETADA):\s*(\d+)\/(\d+)/,
+    // "CICLO_INICIADO: 3/20" -> ciclo en curso dentro de la etapa.
+    CICLO: /^CICLO_(INICIADO|COMPLETADO):\s*(\d+)\/(\d+)/,
     EMERGENCY: /PARO DE EMERGENCIA/i,
     ERROR: /Error:/i
 };

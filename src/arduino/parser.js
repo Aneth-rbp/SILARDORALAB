@@ -68,6 +68,10 @@ class ResponseParser {
         const stageResult = this.parseStage(trimmedLine);
         if (stageResult) return stageResult;
 
+        // Intentar parsear como avance de ciclo
+        const cycleResult = this.parseCycle(trimmedLine);
+        if (cycleResult) return cycleResult;
+
         // Si no coincide con ningún patrón, retornar mensaje genérico
         return {
             type: 'message',
@@ -97,6 +101,28 @@ class ResponseParser {
             stage: parseInt(match[2], 10),
             totalStages: parseInt(match[3], 10),
             cycles: cyclesMatch ? parseInt(cyclesMatch[1], 10) : null,
+            raw: line,
+            timestamp: new Date().toISOString()
+        };
+    }
+
+    /**
+     * Parsea el avance de ciclos dentro de la corrida.
+     *
+     * El firmware imprime "CICLO_INICIADO: 3/20" al empezar cada ciclo y
+     * "CICLO_COMPLETADO: 3/20" al terminarlo. Hasta ahora esas líneas caían en
+     * el caso genérico de mensaje y se perdían: el operador no tenía forma de
+     * saber por qué ciclo iba sin quedarse mirando la máquina.
+     */
+    static parseCycle(line) {
+        const match = RESPONSE_PATTERNS.CICLO.exec(line);
+        if (!match) return null;
+
+        return {
+            type: 'cycle',
+            event: match[1] === 'INICIADO' ? 'started' : 'completed',
+            cycle: parseInt(match[2], 10),
+            totalCycles: parseInt(match[3], 10),
             raw: line,
             timestamp: new Date().toISOString()
         };
@@ -301,7 +327,10 @@ class ResponseParser {
      */
     static parseEmergency(line) {
         if (RESPONSE_PATTERNS.EMERGENCY.test(line)) {
-            const isActive = line.toLowerCase().includes('activado');
+            // "desactivado" contiene "activado": buscar la subcadena marcaba el
+            // paro como activo justo cuando el operador acababa de liberarlo, y
+            // el controlador seguía rechazando el HOME hasta el siguiente STATUS.
+            const isActive = !/desactivado/i.test(line) && /activado/i.test(line);
             return {
                 type: 'emergency',
                 active: isActive,

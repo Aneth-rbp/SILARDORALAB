@@ -10,3 +10,6 @@ build/
 .DS_Store
 Thumbs.db
 
+
+# Config por equipo (Docker aqui, XAMPP en el laboratorio)
+silar-config.json

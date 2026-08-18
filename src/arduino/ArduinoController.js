@@ -534,6 +534,7 @@ class ArduinoController extends EventEmitter {
         const numDippingLen = Number(parameters.dippingLength);
         const numTransSpeed = Number(parameters.transferSpeed);
         const numDipSpeed = Number(parameters.dipSpeed);
+        const numEmersionSpeed = Number(parameters.emersionSpeed);
 
         const dippingLen = (numDippingLen && numDippingLen > 0) ? numDippingLen : 30;
         // Las dos velocidades viajan en mm/s, tal cual las escribe el operador. La
@@ -546,6 +547,12 @@ class ArduinoController extends EventEmitter {
         // válidos (una emersión de 3 mm/s se convertía en 1000).
         const transSpeed = numTransSpeed > 0 ? numTransSpeed : 0;
         const dippingSpeed = numDipSpeed > 0 ? numDipSpeed : 0;
+        // La emersión va aparte de la inmersión porque en SILAR es la que decide
+        // el espesor de la capa que queda adherida. Un 0 significa "sube a la
+        // misma velocidad con la que bajaste": es como se comportaba el sistema
+        // antes de que existiera este parámetro, así que las recetas que ya
+        // estaban guardadas corren exactamente igual.
+        const emersionSpeed = numEmersionSpeed > 0 ? numEmersionSpeed : 0;
 
         const jsonParams = JSON.stringify({
             cycles: Number(parameters.cycles) || 1,
@@ -562,6 +569,7 @@ class ArduinoController extends EventEmitter {
             dippingLength: dippingLen,
             transferSpeed: transSpeed,
             dipSpeed: dippingSpeed,
+            emersionSpeed: emersionSpeed,
             // Posición de cada vaso en mm, medida desde el home de Y. Es un ajuste
             // de la receta por encima de la geometría calibrada de la máquina, para
             // un montaje puntual que no justifica recalibrar el banco. 0 (o vacío)

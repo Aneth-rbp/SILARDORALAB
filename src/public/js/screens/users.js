@@ -16,8 +16,12 @@ class UsersScreen {
 
     destroy() {
         console.log('UsersScreen destroyed');
+        // dispose() antes de remove(): si el modal sigue abierto, Bootstrap se
+        // lleva su backdrop. Borrando solo el markup queda un div a pantalla
+        // completa que bloquea todos los clicks de la aplicacion.
         const modalElement = document.getElementById('userModal');
         if (modalElement) {
+            bootstrap.Modal.getInstance(modalElement)?.dispose();
             modalElement.remove();
         }
     }
@@ -196,6 +200,7 @@ class UsersScreen {
             // Eliminar cualquier modal viejo en el body antes de mover el nuevo
             const oldModal = document.querySelector('body > #userModal');
             if (oldModal && oldModal !== modalElement) {
+                bootstrap.Modal.getInstance(oldModal)?.dispose();
                 oldModal.remove();
             }
             document.body.appendChild(modalElement);

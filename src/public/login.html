@@ -466,7 +466,7 @@
         <!-- Version Info -->
         <footer class="version-info">
             <div class="d-flex justify-content-between align-items-center">
-                <span>SILAR System v2.0 - DORA Lab</span>
+                <span>SILAR System <span id="app-version">—</span> - DORA Lab</span>
                 <time id="current-time" datetime=""></time>
             </div>
         </footer>
@@ -689,11 +689,23 @@
                     
                     this.updateStatusBadge('arduino-status', status.arduino);
                     this.updateStatusBadge('db-status', status.database);
-                    
+                    this.updateVersion(status.version);
+
                 } catch (error) {
                     this.updateStatusBadge('arduino-status', false);
                     this.updateStatusBadge('db-status', false);
                     console.log('Sistema en modo offline');
+                }
+            }
+
+            // La versión sale del package.json que empaqueta el instalador, no de
+            // una constante escrita a mano: así el número que se ve en pantalla es
+            // el de la build realmente instalada y sirve para confirmar que una
+            // actualización entró
+            updateVersion(version) {
+                const element = document.getElementById('app-version');
+                if (element && version) {
+                    element.textContent = `v${version}`;
                 }
             }
 

@@ -17,6 +17,8 @@ Bienvenido a la documentación completa del Sistema SILAR - Control de Laborator
 
 ### 🧪 Recetas
 - **[Recetas por etapas](./recetas-por-etapas.md)** - Encadenar varios juegos de parámetros en una sola corrida
+- **[Velocidad de emersión](./velocidad-emersion.md)** - Separar la velocidad de subida de la de bajada del eje Z (requiere reflashear el Arduino)
+- **[Estado del proceso](./estado-del-proceso.md)** - Cómo se mantienen de acuerdo la placa, la base de datos y la pantalla
 
 ### 🔄 Despliegue
 - **[Actualizaciones remotas (OTA)](./actualizaciones.md)** - Publicar versiones y actualizar el equipo del laboratorio sin ir en persona

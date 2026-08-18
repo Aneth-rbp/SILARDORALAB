@@ -44,6 +44,20 @@
                 <button class="btn btn-icon-only dashboard-center" onclick="window.silarApp.navigateToScreen('dashboard')" title="Volver al Dashboard">
                     <i class="bi bi-house-door"></i>
                 </button>
+
+                <!--
+                    Indicador de proceso: ciclo y tiempo transcurrido en todas
+                    las pantallas. El operador ya no tiene que volver a Proceso
+                    para saber por donde va la receta.
+                -->
+                <div class="process-indicator d-none" id="process-indicator" role="status" aria-live="polite">
+                    <span class="process-indicator-recipe" id="process-indicator-recipe"></span>
+                    <span class="process-indicator-cycles">
+                        <i class="bi bi-arrow-repeat"></i>
+                        <span id="process-indicator-cycles">--/--</span>
+                    </span>
+                    <span class="process-indicator-time" id="process-indicator-time">00:00:00</span>
+                </div>
             </div>
             
             <!-- Right Section -->

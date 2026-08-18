@@ -39,6 +39,20 @@ class SilarWebServer {
     // anuncia una vez, al entrar en ella, y recargar la pantalla no debe dejar
     // al operador sin saber en qué punto de la secuencia va.
     this.currentStage = null;
+    // Ciclo en curso segun el Arduino: { cycle, totalCycles }. Vive en memoria
+    // porque el firmware es el unico que sabe por donde va; la base solo guarda
+    // el total de la receta.
+    this.currentCycle = null;
+    // Reconciliación del estado del proceso contra la placa. El Arduino manda
+    // ProcessActive/ProcessPaused en cada STATUS (cada 500 ms) y esa es la
+    // verdad: los mensajes sueltos (PROCESO_PAUSADO, PROCESO_COMPLETADO) se
+    // pierden si la placa se desconecta o si llegan fuera de orden.
+    this.procesoConfirmadoPorArduino = false;
+    this.lecturasProcesoInactivo = 0;
+    // Hasta cuándo se le concede a la placa el beneficio de la duda para
+    // reclamar un proceso que quedó abierto de una ejecución anterior.
+    this.plazoAdopcionHuerfanos = 0;
+    this.ultimaReconciliacion = 0;
     this.setupExpress();
   }
 
@@ -253,6 +267,11 @@ class SilarWebServer {
         socket.emit('process-stage', this.currentStage);
       }
 
+      // Y el ciclo en curso, para que recargar la pantalla no borre el contador
+      if (this.currentCycle) {
+        socket.emit('process-cycle', this.currentCycle);
+      }
+
       // Constantes de la máquina (CONFIG): el Arduino sólo las manda al arrancar
       if (this.lastArduinoConfig) {
         socket.emit('arduino-data', this.lastArduinoConfig);
@@ -314,7 +333,7 @@ class SilarWebServer {
       if (!this.dbConnection) return;
 
       const [rows] = await this.dbConnection.execute(
-        `SELECT parameters FROM processes WHERE status = 'running' ORDER BY start_time DESC LIMIT 1`
+        `SELECT parameters FROM processes WHERE status = 'running' ORDER BY start_time DESC, id DESC LIMIT 1`
       );
 
       if (rows.length === 0 || !rows[0].parameters) return;
@@ -364,17 +383,51 @@ class SilarWebServer {
         logger.info(`Receta por etapas: etapa ${parsed.stage}/${parsed.totalStages} ${parsed.event}`);
       }
 
+      // Avance de ciclos dentro de la corrida
+      if (parsed.type === 'cycle') {
+        this.currentCycle = {
+          cycle: parsed.cycle,
+          totalCycles: parsed.totalCycles,
+          event: parsed.event
+        };
+        this.io.emit('process-cycle', this.currentCycle);
+      }
+
       // Sincronizar estado del proceso en la base de datos basado en mensajes de control del Arduino
       if (parsed.type === 'message' && parsed.raw) {
         if (parsed.raw.startsWith('PROCESO_COMPLETADO')) {
           this.currentStage = null;
+          this.currentCycle = null;
           this.markProcessState('completed');
         } else if (parsed.raw.startsWith('PROCESO_DETENIDO') || parsed.raw.startsWith('PROCESO_ABORTADO')) {
           this.currentStage = null;
+          this.currentCycle = null;
           this.markProcessState('cancelled', 'Detenido por Arduino');
         } else if (parsed.raw.startsWith('PROCESO_PAUSADO')) {
           this.markProcessState('paused');
+        } else if (parsed.raw.startsWith('PROCESO_REANUDADO')) {
+          // Sin esto la base se quedaba en 'paused' para siempre: se marcaba la
+          // pausa pero nadie marcaba la vuelta. Tras varios pausar/reanudar el
+          // estado real y el guardado dejaban de coincidir.
+          this.markProcessState('running');
         }
+      }
+
+      // El paro de emergencia aborta la receta en el firmware (procesoActivo
+      // pasa a false) y ahí se acaban los avisos: no se imprime ningún
+      // PROCESO_DETENIDO. Sin esto la fila quedaba 'running' para siempre y
+      // bloqueaba el arranque de la siguiente receta.
+      if (parsed.type === 'emergency' && parsed.active) {
+        this.currentStage = null;
+        this.currentCycle = null;
+        this.io.emit('process-stage', null);
+        this.io.emit('process-cycle', null);
+        this.markProcessState('cancelled', 'Paro de emergencia');
+      }
+
+      // La verdad del estado la tiene la placa, no los mensajes sueltos
+      if (parsed.type === 'status') {
+        this.reconciliarProcesoConArduino(parsed);
       }
     });
 
@@ -408,11 +461,16 @@ class SilarWebServer {
       await this.ensureDatabaseConnection();
       
       const [runningProcesses] = await this.dbConnection.execute(
-        `SELECT id, start_time FROM processes WHERE status IN ('running', 'paused') ORDER BY start_time DESC LIMIT 1`
+        `SELECT id, status, start_time FROM processes WHERE status IN ('running', 'paused') ORDER BY start_time DESC, id DESC LIMIT 1`
       );
       
       if (runningProcesses.length > 0) {
         const process = runningProcesses[0];
+
+        // Ya está como se pide: no reescribir ni volver a avisar a los clientes.
+        // Con el reconciliador corriendo dos veces por segundo esto evita un
+        // UPDATE y un broadcast por cada lectura del Arduino.
+        if (process.status === newState) return;
         
         if (newState === 'completed' || newState === 'cancelled') {
           const durationMinutes = process.start_time
@@ -423,11 +481,13 @@ class SilarWebServer {
             `UPDATE processes SET status = ?, end_time = NOW(), duration_minutes = ?, error_message = ? WHERE id = ?`,
             [newState, durationMinutes, reason, process.id]
           );
-        } else if (newState === 'paused') {
+        } else if (newState === 'paused' || newState === 'running') {
           await this.dbConnection.execute(
             `UPDATE processes SET status = ? WHERE id = ?`,
             [newState, process.id]
           );
+        } else {
+          return;
         }
         
         logger.info(`Proceso ${process.id} marcado como ${newState} en la base de datos automáticamente.`);
@@ -437,6 +497,121 @@ class SilarWebServer {
       }
     } catch (error) {
       logger.error(`Error al marcar proceso como ${newState}:`, error);
+    }
+  }
+
+  /**
+   * Ajusta el estado guardado al que reporta la placa en cada STATUS.
+   *
+   * Antes el estado se llevaba solo con los mensajes sueltos que manda el
+   * firmware al cambiar de situación, y eso fallaba de dos maneras. Al pausar y
+   * reanudar seguido, el PROCESO_PAUSADO podía llegar después del UPDATE de
+   * reanudar (el firmware sólo mira el puerto entre paso y paso del motor) y
+   * dejaba la base en 'paused' con la máquina corriendo. Y cuando el proceso
+   * terminaba de una forma que no imprime nada -paro de emergencia, cable
+   * desconectado, la app cerrada a media corrida- la fila se quedaba en
+   * 'running' para siempre, bloqueando el inicio de la siguiente receta.
+   *
+   * ProcessActive/ProcessPaused vienen en cada STATUS, así que sirven de
+   * corrección continua: como mucho el estado guardado va medio segundo por
+   * detrás del real.
+   */
+  async reconciliarProcesoConArduino(status) {
+    if (status.processActive === undefined) return;
+
+    // El STATUS llega cada 500 ms y cada reconciliacion consulta la base. Con
+    // una vez por segundo sobra: el peor caso es que el estado guardado vaya un
+    // segundo por detras del real, y a cambio no se golpea MySQL sin motivo.
+    const ahora = Date.now();
+    if (ahora - this.ultimaReconciliacion < 1000) return;
+    this.ultimaReconciliacion = ahora;
+
+    if (status.processActive) {
+      // La placa reclama el proceso: a partir de aquí su silencio sí significa
+      // que terminó. Vale también para adoptar una corrida que sobrevivió a un
+      // reinicio del servidor.
+      this.procesoConfirmadoPorArduino = true;
+      this.lecturasProcesoInactivo = 0;
+      await this.markProcessState(status.processPaused ? 'paused' : 'running');
+      return;
+    }
+
+    // Sin proceso en la placa. Hay dos momentos en que eso es normal y no debe
+    // cerrar nada: entre el INSERT del proceso y el RECIPE_START (la receta
+    // viaja etapa por etapa y tarda), y el instante justo después de arrancar
+    // el servidor, cuando todavía no sabemos si la placa sigue trabajando.
+    if (!this.procesoConfirmadoPorArduino) {
+      if (this.plazoAdopcionHuerfanos === 0) return;
+      if (Date.now() < this.plazoAdopcionHuerfanos) return;
+    }
+
+    // Se piden varias lecturas seguidas para no cerrar el proceso por un STATUS
+    // suelto llegado a destiempo.
+    this.lecturasProcesoInactivo++;
+    if (this.lecturasProcesoInactivo < 6) return;
+    this.lecturasProcesoInactivo = 0;
+    this.procesoConfirmadoPorArduino = false;
+    this.plazoAdopcionHuerfanos = 0;
+
+    this.currentStage = null;
+    this.currentCycle = null;
+    this.io.emit('process-stage', null);
+    this.io.emit('process-cycle', null);
+    await this.markProcessState('cancelled', 'La placa dejó de reportar el proceso');
+  }
+
+  /**
+   * Al arrancar puede haber recetas en 'running' o 'paused' de una ejecución
+   * anterior. No se cierran de golpe porque el Arduino es independiente del PC
+   * y puede seguir corriendo la receta tras un reinicio de la aplicación: se le
+   * da un plazo para reclamarla en reconciliarProcesoConArduino(). Si no la
+   * reclama -o si ni siquiera hay placa conectada- se cierran, porque una fila
+   * abierta para siempre impide iniciar la siguiente receta y deja al updater
+   * viendo el equipo ocupado de por vida.
+   */
+  async adoptarProcesosHuerfanos(plazoMs = 30000) {
+    try {
+      if (!this.dbConnection) return;
+      await this.ensureDatabaseConnection();
+
+      const [huerfanos] = await this.dbConnection.execute(
+        `SELECT id, process_number, status FROM processes WHERE status IN ('running', 'paused')`
+      );
+
+      if (huerfanos.length === 0) return;
+
+      logger.warn(`Procesos abiertos de una ejecución anterior: ${huerfanos.map(pr => pr.process_number).join(', ')}. Esperando a que el Arduino los reclame.`);
+      this.procesoConfirmadoPorArduino = false;
+      this.lecturasProcesoInactivo = 0;
+      this.plazoAdopcionHuerfanos = Date.now() + plazoMs;
+
+      setTimeout(async () => {
+        if (this.procesoConfirmadoPorArduino) return;
+        this.plazoAdopcionHuerfanos = 0;
+        try {
+          if (!this.dbConnection) return;
+          const [pendientes] = await this.dbConnection.execute(
+            `UPDATE processes
+                SET status = 'cancelled',
+                    end_time = NOW(),
+                    duration_minutes = COALESCE(TIMESTAMPDIFF(MINUTE, start_time, NOW()), 0),
+                    error_message = 'Interrumpido: la aplicación se cerró durante la corrida'
+              WHERE status IN ('running', 'paused')`
+          );
+          if (pendientes.affectedRows > 0) {
+            logger.warn(`${pendientes.affectedRows} proceso(s) cerrado(s): el Arduino no los reclamó.`);
+            this.currentStage = null;
+            this.currentCycle = null;
+            this.io.emit('process-stage', null);
+            this.io.emit('process-cycle', null);
+            this.io.emit('process-status-update', { status: 'cancelled', processId: null });
+          }
+        } catch (error) {
+          logger.error('Error cerrando procesos huérfanos:', error);
+        }
+      }, plazoMs);
+    } catch (error) {
+      logger.error('Error revisando procesos huérfanos al arrancar:', error);
     }
   }
 
@@ -504,6 +679,15 @@ class SilarWebServer {
     } catch (error) {
       this.isReconnecting = false;
       logger.databaseError(error);
+      // Detalle accionable para diagnosticar a distancia el equipo del
+      // laboratorio, sin exponer la contraseña en el log
+      logger.error('No se pudo conectar a MySQL', {
+        servidor: `${config.database.host}:${config.database.port}`,
+        usuario: config.database.user,
+        baseDeDatos: config.database.database,
+        conPassword: config.database.password !== '',
+        code: error.code
+      });
       this.dbConnection = null;
       throw error;
     }
@@ -672,6 +856,8 @@ class SilarWebServer {
       dippingLength: Number(row.dipping_length) || 0,
       transferSpeed: Number(row.transfer_speed) || 0,
       dipSpeed: Number(row.dip_speed) || 0,
+      // 0 = subir a la misma velocidad de bajada (comportamiento anterior)
+      emersionSpeed: Number(row.emersion_speed) || 0,
       posY1: Number(row.pos_y1) || 0,
       posY2: Number(row.pos_y2) || 0,
       posY3: Number(row.pos_y3) || 0,
@@ -738,6 +924,7 @@ class SilarWebServer {
       etapa?.dippingLength || 0,
       etapa?.transferSpeed || 0,
       etapa?.dipSpeed || 0,
+      etapa?.emersionSpeed || 0,
       etapa?.posY1 || 0,
       etapa?.posY2 || 0,
       etapa?.posY3 || 0,
@@ -759,9 +946,9 @@ class SilarWebServer {
        accel_x, accel_y, humidity_offset, temperature_offset,
        dipping_wait0, dipping_wait1, dipping_wait2, dipping_wait3, transfer_wait,
        cycles, fan, except_dripping1, except_dripping2, except_dripping3, except_dripping4,
-       dip_start_position, dipping_length, transfer_speed, dip_speed,
+       dip_start_position, dipping_length, transfer_speed, dip_speed, emersion_speed,
        pos_y1, pos_y2, pos_y3, pos_y4`;
-    const marcadores = new Array(30).fill('?').join(', ');
+    const marcadores = new Array(31).fill('?').join(', ');
 
     for (let i = 0; i < etapas.length; i++) {
       await this.dbConnection.execute(
@@ -842,7 +1029,7 @@ class SilarWebServer {
                  rp.accel_x, rp.accel_y, rp.humidity_offset, rp.temperature_offset,
                  rp.dipping_wait0, rp.dipping_wait1, rp.dipping_wait2, rp.dipping_wait3, rp.transfer_wait,
                  rp.cycles, rp.fan, rp.except_dripping1, rp.except_dripping2, rp.except_dripping3, rp.except_dripping4,
-                 rp.dip_start_position, rp.dipping_length, rp.transfer_speed, rp.dip_speed,
+                 rp.dip_start_position, rp.dipping_length, rp.transfer_speed, rp.dip_speed, rp.emersion_speed,
                  rp.pos_y1, rp.pos_y2, rp.pos_y3, rp.pos_y4
           FROM recipes r 
           LEFT JOIN users u ON r.created_by_user_id = u.id 
@@ -858,7 +1045,7 @@ class SilarWebServer {
                  rp.accel_x, rp.accel_y, rp.humidity_offset, rp.temperature_offset,
                  rp.dipping_wait0, rp.dipping_wait1, rp.dipping_wait2, rp.dipping_wait3, rp.transfer_wait,
                  rp.cycles, rp.fan, rp.except_dripping1, rp.except_dripping2, rp.except_dripping3, rp.except_dripping4,
-                 rp.dip_start_position, rp.dipping_length, rp.transfer_speed, rp.dip_speed,
+                 rp.dip_start_position, rp.dipping_length, rp.transfer_speed, rp.dip_speed, rp.emersion_speed,
                  rp.pos_y1, rp.pos_y2, rp.pos_y3, rp.pos_y4
           FROM recipes r 
           LEFT JOIN users u ON r.created_by_user_id = u.id 
@@ -903,6 +1090,8 @@ class SilarWebServer {
           dippingLength: row.dipping_length || 0,
           transferSpeed: row.transfer_speed || 0,
           dipSpeed: row.dip_speed || 0,
+          // 0 = subir a la misma velocidad de bajada
+          emersionSpeed: row.emersion_speed || 0,
           // Posición de cada vaso, en mm desde el home de Y. 0 = usar la
           // geometría calibrada de la máquina, que es el caso habitual.
           posY1: row.pos_y1 || 0,
@@ -1015,9 +1204,9 @@ class SilarWebServer {
            (recipe_id, duration, temperature, velocity_x, velocity_y, accel_x, accel_y, humidity_offset, temperature_offset,
             dipping_wait0, dipping_wait1, dipping_wait2, dipping_wait3, transfer_wait,
             cycles, fan, except_dripping1, except_dripping2, except_dripping3, except_dripping4,
-            dip_start_position, dipping_length, transfer_speed, dip_speed,
+            dip_start_position, dipping_length, transfer_speed, dip_speed, emersion_speed,
             pos_y1, pos_y2, pos_y3, pos_y4)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
           [
             recipeId,
             parameters?.duration || 0,
@@ -1046,6 +1235,7 @@ class SilarWebServer {
             parameters?.dippingLength || 0,
             parameters?.transferSpeed || 0,
             parameters?.dipSpeed || 0,
+            parameters?.emersionSpeed || 0,
             // Posiciones de los vasos de esta receta (mm desde el home de Y)
             parameters?.posY1 || 0,
             parameters?.posY2 || 0,
@@ -1208,6 +1398,7 @@ class SilarWebServer {
           parameters?.dippingLength || 0,
           parameters?.transferSpeed || 0,
           parameters?.dipSpeed || 0,
+          parameters?.emersionSpeed || 0,
           // Posiciones de los vasos de esta receta (mm desde el home de Y)
           parameters?.posY1 || 0,
           parameters?.posY2 || 0,
@@ -1217,7 +1408,7 @@ class SilarWebServer {
 
         // Log para depuración
         logger.debug(`Actualizando parámetros de receta ${recipeId}`, {
-          columnCount: 28,
+          columnCount: 29,
           valueCount: paramsArray.length,
           params: paramsArray
         });
@@ -1227,9 +1418,9 @@ class SilarWebServer {
            (recipe_id, duration, temperature, velocity_x, velocity_y, accel_x, accel_y, humidity_offset, temperature_offset,
             dipping_wait0, dipping_wait1, dipping_wait2, dipping_wait3, transfer_wait,
             cycles, fan, except_dripping1, except_dripping2, except_dripping3, except_dripping4,
-            dip_start_position, dipping_length, transfer_speed, dip_speed,
+            dip_start_position, dipping_length, transfer_speed, dip_speed, emersion_speed,
             pos_y1, pos_y2, pos_y3, pos_y4)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
            ON DUPLICATE KEY UPDATE
            duration = VALUES(duration),
            temperature = VALUES(temperature),
@@ -1254,6 +1445,7 @@ class SilarWebServer {
            dipping_length = VALUES(dipping_length),
            transfer_speed = VALUES(transfer_speed),
            dip_speed = VALUES(dip_speed),
+           emersion_speed = VALUES(emersion_speed),
            pos_y1 = VALUES(pos_y1),
            pos_y2 = VALUES(pos_y2),
            pos_y3 = VALUES(pos_y3),
@@ -1388,6 +1580,7 @@ class SilarWebServer {
       arduinoPort: arduinoState.port,
       arduinoMode: arduinoState.mode,
       database: this.dbConnection ? true : false,
+      version: config.app.version,
       timestamp: new Date().toISOString()
     });
   }
@@ -1400,8 +1593,12 @@ class SilarWebServer {
    */
   async getSystemBusy(req, res) {
     try {
+      // Sin base de datos el servidor no puede iniciar ni registrar un proceso,
+      // así que no hay nada que proteger. Responder "ocupado" aquí dejaba el
+      // equipo sin poder instalar justamente las actualizaciones que arreglan
+      // la conexión a MySQL: se posponía cada 10 minutos para siempre.
       if (!this.dbConnection) {
-        return res.json({ busy: true, reason: 'database_unavailable' });
+        return res.json({ busy: false, reason: 'database_unavailable' });
       }
 
       await this.ensureDatabaseConnection();
@@ -1788,12 +1985,35 @@ class SilarWebServer {
 
       await this.ensureDatabaseConnection();
 
-      // Buscar si hay un proceso ejecutándose
+      // Buscar si hay un proceso ejecutándose.
+      //
+      // El tiempo transcurrido lo calcula MySQL, no el cliente. start_time es
+      // un TIMESTAMP y el driver lo entrega interpretándolo con la zona del
+      // proceso de Node: si el motor corre en otra zona (MySQL en Docker en
+      // UTC contra un equipo en UTC-6, por ejemplo) la fecha sale desplazada
+      // horas y el cronómetro de la pantalla se queda clavado en 00:00:00
+      // porque el arranque parece estar en el futuro. TIMESTAMPDIFF resuelve
+      // la resta dentro del motor, donde las dos fechas viven en la misma
+      // zona, y lo que viaja es un número de segundos sin ambigüedad.
+      //
+      // total_cycles permite mostrar "Ciclo 3/20" en la cabecera desde el
+      // primer instante: los ciclos de la receta se conocen aunque el Arduino
+      // todavía no haya anunciado ninguno. En recetas por etapas el total es
+      // la suma de los ciclos de todas las etapas.
       const [processes] = await this.dbConnection.execute(
-        `SELECT id, status, start_time, recipe_id, process_number 
-         FROM processes 
-         WHERE status IN ('running', 'paused') 
-         ORDER BY start_time DESC 
+        `SELECT p.id, p.status, p.start_time, p.recipe_id, p.process_number,
+                TIMESTAMPDIFF(SECOND, p.start_time, NOW()) AS elapsed_seconds,
+                r.name AS recipe_name,
+                COALESCE(
+                  (SELECT SUM(rs.cycles) FROM recipe_stages rs WHERE rs.recipe_id = p.recipe_id),
+                  rp.cycles,
+                  1
+                ) AS total_cycles
+         FROM processes p
+         LEFT JOIN recipes r ON r.id = p.recipe_id
+         LEFT JOIN recipe_parameters rp ON rp.recipe_id = p.recipe_id
+         WHERE p.status IN ('running', 'paused')
+         ORDER BY p.start_time DESC, p.id DESC
          LIMIT 1`
       );
 
@@ -1814,8 +2034,12 @@ class SilarWebServer {
         process: {
           id: process.id,
           recipeId: process.recipe_id,
+          recipeName: process.recipe_name,
           processNumber: process.process_number,
-          startTime: process.start_time
+          startTime: process.start_time,
+          elapsedSeconds: Number(process.elapsed_seconds) || 0,
+          totalCycles: Number(process.total_cycles) || null,
+          currentCycle: this.currentCycle?.cycle || null
         }
       });
     } catch (error) {
@@ -1928,6 +2152,7 @@ class SilarWebServer {
         dippingLength: Number(recipe.dipping_length) || 0,
         transferSpeed: Number(recipe.transfer_speed) || 0,
         dipSpeed: Number(recipe.dip_speed) || 0,
+        emersionSpeed: Number(recipe.emersion_speed) || 0,
         posY1: Number(recipe.pos_y1) || 0,
         posY2: Number(recipe.pos_y2) || 0,
         posY3: Number(recipe.pos_y3) || 0,
@@ -1972,6 +2197,13 @@ class SilarWebServer {
       // La etapa la anuncia el Arduino al entrar en cada una, pero la primera se
       // adelanta aquí: entre el arranque y ese anuncio hay todo el posicionado
       // inicial de Z, y la pantalla no debe quedarse en blanco mientras tanto.
+      // Arranca una corrida nueva: la placa todavía no la reclama (la receta
+      // viaja etapa por etapa y tarda) y el reconciliador debe esperar a que lo
+      // haga antes de dar por terminado nada.
+      this.procesoConfirmadoPorArduino = false;
+      this.lecturasProcesoInactivo = 0;
+      this.plazoAdopcionHuerfanos = Date.now() + 30000;
+
       this.currentStage = recipe.is_staged
         ? { stage: 1, totalStages: etapas.length, cycles: Number(etapas[0]?.cycles) || 0 }
         : null;
@@ -2040,7 +2272,7 @@ class SilarWebServer {
         `SELECT id, status 
          FROM processes 
          WHERE status = 'running' 
-         ORDER BY start_time DESC 
+         ORDER BY start_time DESC, id DESC
          LIMIT 1`
       );
 
@@ -2108,7 +2340,7 @@ class SilarWebServer {
         `SELECT id, status 
          FROM processes 
          WHERE status = 'paused' 
-         ORDER BY start_time DESC 
+         ORDER BY start_time DESC, id DESC
          LIMIT 1`
       );
 
@@ -2176,7 +2408,7 @@ class SilarWebServer {
         `SELECT id, status, start_time 
          FROM processes 
          WHERE status IN ('running', 'paused') 
-         ORDER BY start_time DESC 
+         ORDER BY start_time DESC, id DESC
          LIMIT 1`
       );
 
@@ -2217,7 +2449,9 @@ class SilarWebServer {
       );
 
       this.currentStage = null;
+      this.currentCycle = null;
       this.io.emit('process-stage', null);
+      this.io.emit('process-cycle', null);
 
       logger.info('Proceso detenido', {
         processId: process.id,
@@ -2625,6 +2859,8 @@ class SilarWebServer {
     } catch (dbError) {
       logger.error('Error crítico: No se pudo conectar a la base de datos al arrancar el servidor:', dbError);
     }
+
+    await this.adoptarProcesosHuerfanos();
 
     try {
       await this.arduinoController.connect();

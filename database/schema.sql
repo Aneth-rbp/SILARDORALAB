@@ -82,7 +82,8 @@ CREATE TABLE IF NOT EXISTS recipe_parameters (
     dip_start_position DECIMAL(8,2) DEFAULT 0.0 COMMENT 'Posición inicial Z con sustrato',
     dipping_length DECIMAL(8,2) DEFAULT 0.0 COMMENT 'Longitud de inmersión de sustrato',
     transfer_speed DECIMAL(8,2) DEFAULT 0.0 COMMENT 'Velocidad Y cambio de solución, en mm/s',
-    dip_speed DECIMAL(8,2) DEFAULT 0.0 COMMENT 'Velocidad Z inmersión y emersión del sustrato, en mm/s',
+    dip_speed DECIMAL(8,2) DEFAULT 0.0 COMMENT 'Velocidad Z de bajada del sustrato a la solución, en mm/s',
+    emersion_speed DECIMAL(8,2) DEFAULT 0.0 COMMENT 'Velocidad Z de subida del sustrato, en mm/s (0 = usar dip_speed)',
     -- Posición de cada vaso desde el home del eje Y. Es el ajuste por receta que
     -- se pone encima de la geometría calibrada de la máquina (CAL_Y_*, en la
     -- EEPROM del Arduino), para un montaje puntual. Van uno a uno porque los
@@ -158,7 +159,8 @@ CREATE TABLE IF NOT EXISTS recipe_stages (
     dip_start_position DECIMAL(8,2) DEFAULT 0.0 COMMENT 'Posición inicial Z con sustrato',
     dipping_length DECIMAL(8,2) DEFAULT 0.0 COMMENT 'Longitud de inmersión de sustrato',
     transfer_speed DECIMAL(8,2) DEFAULT 0.0 COMMENT 'Velocidad Y cambio de solución, en mm/s',
-    dip_speed DECIMAL(8,2) DEFAULT 0.0 COMMENT 'Velocidad Z inmersión y emersión del sustrato, en mm/s',
+    dip_speed DECIMAL(8,2) DEFAULT 0.0 COMMENT 'Velocidad Z de bajada del sustrato a la solución, en mm/s',
+    emersion_speed DECIMAL(8,2) DEFAULT 0.0 COMMENT 'Velocidad Z de subida del sustrato, en mm/s (0 = usar dip_speed)',
     pos_y1 DECIMAL(8,2) DEFAULT 0.0 COMMENT 'Posición del vaso 1 desde el home de Y, en mm (0 = geometría de la máquina)',
     pos_y2 DECIMAL(8,2) DEFAULT 0.0 COMMENT 'Posición del vaso 2 desde el home de Y, en mm (0 = geometría de la máquina)',
     pos_y3 DECIMAL(8,2) DEFAULT 0.0 COMMENT 'Posición del vaso 3 desde el home de Y, en mm (0 = geometría de la máquina)',

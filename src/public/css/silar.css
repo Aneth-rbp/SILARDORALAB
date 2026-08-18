@@ -1244,6 +1244,79 @@ body:not(.login-page) {
     left: 50%;
     transform: translateX(-50%);
     z-index: 1001;
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+}
+
+/*
+ * Indicador de proceso en la cabecera.
+ *
+ * Solo aparece mientras hay una receta corriendo. Los numeros van grandes y en
+ * fuente monoespaciada porque se leen de lejos, de pie frente a la maquina, y
+ * porque con fuente proporcional el cronometro baila cada segundo al cambiar
+ * el ancho de los digitos.
+ */
+.process-indicator {
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+    padding: 0.35rem 0.9rem;
+    border-radius: 999px;
+    background: rgba(255, 255, 255, 0.15);
+    border: 1px solid rgba(255, 255, 255, 0.35);
+    color: #fff;
+    white-space: nowrap;
+}
+
+.process-indicator.d-none {
+    display: none;
+}
+
+.process-indicator-recipe {
+    font-size: 0.8rem;
+    opacity: 0.85;
+    max-width: 12ch;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.process-indicator-cycles {
+    display: flex;
+    align-items: center;
+    gap: 0.3rem;
+    font-size: 1rem;
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+}
+
+.process-indicator-time {
+    font-family: 'Courier New', monospace;
+    font-size: 1.05rem;
+    font-weight: 700;
+    letter-spacing: 0.5px;
+}
+
+/* La flecha gira mientras la maquina trabaja: de un vistazo se distingue una
+   corrida en marcha de una pausada, sin leer ningun texto. */
+.process-indicator.is-running .process-indicator-cycles i {
+    animation: process-indicator-spin 2.5s linear infinite;
+}
+
+.process-indicator.is-paused {
+    background: rgba(255, 193, 7, 0.25);
+    border-color: rgba(255, 193, 7, 0.7);
+}
+
+@keyframes process-indicator-spin {
+    from { transform: rotate(0deg); }
+    to { transform: rotate(360deg); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .process-indicator.is-running .process-indicator-cycles i {
+        animation: none;
+    }
 }
 
 .header-right {
@@ -1593,6 +1666,10 @@ body:not(.login-page) {
         left: auto;
         transform: none;
         order: 1;
+    }
+
+    .process-indicator-recipe {
+        display: none;
     }
     
     .header-left, .header-right {
