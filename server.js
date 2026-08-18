@@ -21,6 +21,11 @@ const { ArduinoController } = require('./src/arduino/ArduinoController');
 // const { getInstance: getFlasherInstance } = require('./src/arduino/flasher/ArduinoFlasher'); // Comentado - módulo no disponible
 
 class SilarWebServer {
+  // Mismo tope que MAX_ETAPAS en el firmware. Si aquí fuera mayor, la receta se
+  // guardaría entera y el Arduino rechazaría las etapas sobrantes en mitad de
+  // la carga, con la receta ya a medio mandar.
+  static MAX_STAGES = 8;
+
   constructor() {
     this.server = null;
     this.io = null;
@@ -28,6 +33,12 @@ class SilarWebServer {
     this.arduinoController = getInstance();
     this.isReconnecting = false;
     this.systemConfigCache = {};
+    this.lastArduinoConfig = null;
+    // Etapa en curso de una receta por etapas. Se guarda para poder contársela
+    // a un cliente que se conecte a mitad de la corrida: el Arduino solo la
+    // anuncia una vez, al entrar en ella, y recargar la pantalla no debe dejar
+    // al operador sin saber en qué punto de la secuencia va.
+    this.currentStage = null;
     this.setupExpress();
   }
 
@@ -157,6 +168,7 @@ class SilarWebServer {
     app.put('/api/recipes/:id', this.authenticateToken.bind(this), this.updateRecipe.bind(this));
     app.delete('/api/recipes/:id', this.authenticateToken.bind(this), this.deleteRecipe.bind(this));
     app.get('/api/system/status', this.getSystemStatus.bind(this));
+    app.get('/api/system/busy', this.getSystemBusy.bind(this));
     app.get('/api/process/status', this.authenticateToken.bind(this), this.getProcessStatus.bind(this));
     app.post('/api/process/start', this.authenticateToken.bind(this), this.startProcess.bind(this));
     app.post('/api/process/pause', this.authenticateToken.bind(this), this.pauseProcess.bind(this));
@@ -182,6 +194,23 @@ class SilarWebServer {
     app.post('/api/arduino/disconnect', this.disconnectArduino.bind(this));
     app.get('/api/arduino/state', this.getArduinoState.bind(this));
     app.post('/api/arduino/command', this.sendArduinoCommand.bind(this));
+
+    // Rutas API de calibración del eje Z (solo administradores).
+    // Van autenticadas a diferencia del resto de /api/arduino porque escriben
+    // en la EEPROM de la máquina y una escala mal puesta puede estrellar el eje.
+    app.get('/api/arduino/calibration/z', this.authenticateToken.bind(this), this.getZCalibration.bind(this));
+    app.put('/api/arduino/calibration/z', this.authenticateToken.bind(this), this.updateZCalibration.bind(this));
+    app.post('/api/arduino/calibration/z/save', this.authenticateToken.bind(this), this.saveZCalibration.bind(this));
+    app.post('/api/arduino/calibration/z/reset', this.authenticateToken.bind(this), this.resetZCalibration.bind(this));
+    app.post('/api/arduino/calibration/z/goto', this.authenticateToken.bind(this), this.gotoZHeight.bind(this));
+    app.post('/api/arduino/calibration/z/jog', this.authenticateToken.bind(this), this.jogZCalibration.bind(this));
+    app.post('/api/arduino/calibration/z/home', this.authenticateToken.bind(this), this.homeZCalibration.bind(this));
+
+    // Geometría del eje Y: separación entre vasos y escala del eje.
+    app.get('/api/arduino/calibration/y', this.authenticateToken.bind(this), this.getYCalibration.bind(this));
+    app.put('/api/arduino/calibration/y', this.authenticateToken.bind(this), this.updateYCalibration.bind(this));
+    app.post('/api/arduino/calibration/y/save', this.authenticateToken.bind(this), this.saveYCalibration.bind(this));
+    app.post('/api/arduino/calibration/y/reset', this.authenticateToken.bind(this), this.resetYCalibration.bind(this));
 
     // Rutas API Flash Arduino
     app.get('/api/arduino/flash/info', this.getFlashInfo.bind(this));
@@ -214,6 +243,20 @@ class SilarWebServer {
 
       // Enviar estado actual del Arduino al conectar
       socket.emit('arduino-state', this.arduinoController.getState());
+
+      // Y los parámetros del proceso en curso, para que recargar la página no
+      // deje las tarjetas de monitoreo vacías
+      this.sendRunningProcessParameters(socket);
+
+      // La etapa en curso, si la corrida es por etapas
+      if (this.currentStage) {
+        socket.emit('process-stage', this.currentStage);
+      }
+
+      // Constantes de la máquina (CONFIG): el Arduino sólo las manda al arrancar
+      if (this.lastArduinoConfig) {
+        socket.emit('arduino-data', this.lastArduinoConfig);
+      }
 
       // Manejar comandos Arduino desde el cliente
       socket.on('arduino-command', async (data) => {
@@ -262,6 +305,30 @@ class SilarWebServer {
     this.setupArduinoEventForwarding();
   }
 
+  /**
+   * Emite a un socket los parámetros del proceso que esté corriendo.
+   * Los parámetros se guardan como JSON en processes.parameters al iniciar.
+   */
+  async sendRunningProcessParameters(socket) {
+    try {
+      if (!this.dbConnection) return;
+
+      const [rows] = await this.dbConnection.execute(
+        `SELECT parameters FROM processes WHERE status = 'running' ORDER BY start_time DESC LIMIT 1`
+      );
+
+      if (rows.length === 0 || !rows[0].parameters) return;
+
+      const parameters = typeof rows[0].parameters === 'string'
+        ? JSON.parse(rows[0].parameters)
+        : rows[0].parameters;
+
+      socket.emit('process-parameters', parameters);
+    } catch (error) {
+      logger.error('Error enviando parámetros del proceso en curso:', error);
+    }
+  }
+
   setupArduinoEventForwarding() {
     // Datos parseados del Arduino
     this.arduinoController.on('data', (parsed) => {
@@ -275,14 +342,35 @@ class SilarWebServer {
         }
       }
 
+      // El firmware sólo envía CONFIG al arrancar; se guarda para poder
+      // reenviarlo a los clientes que se conecten después
+      if (parsed.type === 'config') {
+        this.lastArduinoConfig = parsed;
+      }
+
       this.io.emit('arduino-data', parsed);
       logger.debug('Arduino data broadcast with offsets applied', { type: parsed.type });
+
+      // Avance de una receta por etapas
+      if (parsed.type === 'stage') {
+        if (parsed.event === 'started') {
+          this.currentStage = {
+            stage: parsed.stage,
+            totalStages: parsed.totalStages,
+            cycles: parsed.cycles
+          };
+          this.io.emit('process-stage', this.currentStage);
+        }
+        logger.info(`Receta por etapas: etapa ${parsed.stage}/${parsed.totalStages} ${parsed.event}`);
+      }
 
       // Sincronizar estado del proceso en la base de datos basado en mensajes de control del Arduino
       if (parsed.type === 'message' && parsed.raw) {
         if (parsed.raw.startsWith('PROCESO_COMPLETADO')) {
+          this.currentStage = null;
           this.markProcessState('completed');
         } else if (parsed.raw.startsWith('PROCESO_DETENIDO') || parsed.raw.startsWith('PROCESO_ABORTADO')) {
+          this.currentStage = null;
           this.markProcessState('cancelled', 'Detenido por Arduino');
         } else if (parsed.raw.startsWith('PROCESO_PAUSADO')) {
           this.markProcessState('paused');
@@ -373,6 +461,7 @@ class SilarWebServer {
 
       this.dbConnection = await mysql.createConnection({
         host: config.database.host,
+        port: config.database.port,
         user: config.database.user,
         password: config.database.password,
         database: config.database.database,
@@ -549,6 +638,195 @@ class SilarWebServer {
     }
   }
 
+  /**
+   * Convierte una fila de recipe_stages (o de recipe_parameters) al mismo
+   * objeto camelCase que el frontend y el ArduinoController ya esperan.
+   *
+   * Es el mismo juego de campos para una etapa que para una receta normal: una
+   * etapa ES una receta normal, solo que encadenada con otras. Si aquí faltara
+   * un campo, esa etapa correría con el default del firmware en vez de con lo
+   * que el operador escribió, y sin ningún error visible.
+   */
+  mapRecipeParameterRow(row) {
+    return {
+      duration: Number(row.duration) || 0,
+      temperature: Number(row.temperature) || 0,
+      velocityX: Number(row.velocity_x) || 0,
+      velocityY: Number(row.velocity_y) || 0,
+      accelX: Number(row.accel_x) || 0,
+      accelY: Number(row.accel_y) || 0,
+      humidityOffset: Number(row.humidity_offset) || 0,
+      temperatureOffset: Number(row.temperature_offset) || 0,
+      dippingWait0: Number(row.dipping_wait0) || 0,
+      dippingWait1: Number(row.dipping_wait1) || 0,
+      dippingWait2: Number(row.dipping_wait2) || 0,
+      dippingWait3: Number(row.dipping_wait3) || 0,
+      transferWait: Number(row.transfer_wait) || 0,
+      cycles: Number(row.cycles) || 1,
+      fan: !!row.fan,
+      exceptDripping1: !!row.except_dripping1,
+      exceptDripping2: !!row.except_dripping2,
+      exceptDripping3: !!row.except_dripping3,
+      exceptDripping4: !!row.except_dripping4,
+      dipStartPosition: Number(row.dip_start_position) || 0,
+      dippingLength: Number(row.dipping_length) || 0,
+      transferSpeed: Number(row.transfer_speed) || 0,
+      dipSpeed: Number(row.dip_speed) || 0,
+      posY1: Number(row.pos_y1) || 0,
+      posY2: Number(row.pos_y2) || 0,
+      posY3: Number(row.pos_y3) || 0,
+      posY4: Number(row.pos_y4) || 0
+    };
+  }
+
+  /**
+   * Lee las etapas de una o varias recetas, en orden de ejecución.
+   * Se consulta de una sola vez para todas las recetas del listado: una consulta
+   * por receta convertiría abrir la pantalla en decenas de viajes a la base.
+   */
+  async getStagesForRecipes(recipeIds) {
+    const porReceta = new Map();
+    if (!recipeIds || recipeIds.length === 0) return porReceta;
+
+    const marcadores = recipeIds.map(() => '?').join(', ');
+    const [rows] = await this.dbConnection.execute(
+      `SELECT * FROM recipe_stages WHERE recipe_id IN (${marcadores}) ORDER BY recipe_id, stage_order`,
+      recipeIds
+    );
+
+    for (const row of rows) {
+      if (!porReceta.has(row.recipe_id)) porReceta.set(row.recipe_id, []);
+      porReceta.get(row.recipe_id).push({
+        id: row.id,
+        stageOrder: Number(row.stage_order),
+        name: row.name || '',
+        ...this.mapRecipeParameterRow(row)
+      });
+    }
+
+    return porReceta;
+  }
+
+  /**
+   * Valores de una etapa listos para el INSERT, en el orden de STAGE_COLUMNS.
+   */
+  stageValues(recipeId, orden, etapa) {
+    return [
+      recipeId,
+      orden,
+      etapa?.name || null,
+      etapa?.duration || 0,
+      etapa?.temperature || 0,
+      etapa?.velocityX || 0,
+      etapa?.velocityY || 0,
+      etapa?.accelX || 0,
+      etapa?.accelY || 0,
+      etapa?.humidityOffset || 0,
+      etapa?.temperatureOffset || 0,
+      etapa?.dippingWait0 || 0,
+      etapa?.dippingWait1 || 0,
+      etapa?.dippingWait2 || 0,
+      etapa?.dippingWait3 || 0,
+      etapa?.transferWait || 0,
+      etapa?.cycles || 1,
+      etapa?.fan ? 1 : 0,
+      etapa?.exceptDripping1 ? 1 : 0,
+      etapa?.exceptDripping2 ? 1 : 0,
+      etapa?.exceptDripping3 ? 1 : 0,
+      etapa?.exceptDripping4 ? 1 : 0,
+      etapa?.dipStartPosition || 0,
+      etapa?.dippingLength || 0,
+      etapa?.transferSpeed || 0,
+      etapa?.dipSpeed || 0,
+      etapa?.posY1 || 0,
+      etapa?.posY2 || 0,
+      etapa?.posY3 || 0,
+      etapa?.posY4 || 0
+    ];
+  }
+
+  /**
+   * Reemplaza por completo la lista de etapas de una receta.
+   * Se borra y se vuelve a insertar en vez de actualizar fila por fila porque
+   * el operador puede reordenar, quitar o insertar etapas en medio: casar filas
+   * viejas con nuevas sería adivinar, y una etapa huérfana correría de verdad.
+   * Va siempre dentro de la transacción de quien llama.
+   */
+  async replaceRecipeStages(recipeId, etapas) {
+    await this.dbConnection.execute('DELETE FROM recipe_stages WHERE recipe_id = ?', [recipeId]);
+
+    const columnas = `recipe_id, stage_order, name, duration, temperature, velocity_x, velocity_y,
+       accel_x, accel_y, humidity_offset, temperature_offset,
+       dipping_wait0, dipping_wait1, dipping_wait2, dipping_wait3, transfer_wait,
+       cycles, fan, except_dripping1, except_dripping2, except_dripping3, except_dripping4,
+       dip_start_position, dipping_length, transfer_speed, dip_speed,
+       pos_y1, pos_y2, pos_y3, pos_y4`;
+    const marcadores = new Array(30).fill('?').join(', ');
+
+    for (let i = 0; i < etapas.length; i++) {
+      await this.dbConnection.execute(
+        `INSERT INTO recipe_stages (${columnas}) VALUES (${marcadores})`,
+        this.stageValues(recipeId, i + 1, etapas[i])
+      );
+    }
+  }
+
+  /**
+   * Resumen de una receta por etapas, con la forma de una receta normal.
+   *
+   * Una receta por etapas también guarda su fila en recipe_parameters. No es
+   * duplicación por comodidad: el listado de recetas, la vista
+   * v_recipes_with_parameters y el historial de procesos leen de ahí, y sin
+   * resumen una receta por etapas aparecería con la duración y los ciclos
+   * vacíos en todas esas pantallas. La duración y los ciclos se suman; el resto
+   * se toma de la primera etapa, que es con lo que arranca la corrida.
+   */
+  buildStagedSummary(etapas) {
+    const primera = etapas[0] || {};
+    return {
+      ...primera,
+      name: undefined,
+      // El resumen se valida con las mismas reglas que una receta normal, y
+      // ahí duration tiene un tope de 999 minutos. Sumando ocho etapas largas se
+      // puede pasar, y el guardado fallaría con un error sobre un campo que el
+      // operador no escribió: se recorta, que solo afecta a la estimación.
+      duration: Math.min(999, etapas.reduce((total, e) => total + (Number(e.duration) || 0), 0)),
+      cycles: etapas.reduce((total, e) => total + (Number(e.cycles) || 0), 0)
+    };
+  }
+
+  /**
+   * Saca las etapas del cuerpo de la petición y comprueba que sirven.
+   * Devuelve { esPorEtapas, etapas, error }.
+   */
+  extractStages(body) {
+    const esPorEtapas = body.isStaged === true || body.isStaged === 'true' || body.isStaged === 1;
+    if (!esPorEtapas) return { esPorEtapas: false, etapas: [] };
+
+    const etapas = Array.isArray(body.stages) ? body.stages : [];
+
+    if (etapas.length === 0) {
+      return { esPorEtapas, etapas, error: 'Una receta por etapas necesita al menos una etapa' };
+    }
+    if (etapas.length > SilarWebServer.MAX_STAGES) {
+      return {
+        esPorEtapas, etapas,
+        error: `Una receta admite como máximo ${SilarWebServer.MAX_STAGES} etapas`
+      };
+    }
+    for (let i = 0; i < etapas.length; i++) {
+      const validacion = validator.validateParameters(etapas[i]);
+      if (!validacion.isValid) {
+        const detalle = Object.entries(validacion.errors)
+          .map(([campo, mensajes]) => `${campo}: ${mensajes.join(', ')}`)
+          .join('; ');
+        return { esPorEtapas, etapas, error: `Etapa ${i + 1} -> ${detalle}` };
+      }
+    }
+
+    return { esPorEtapas, etapas };
+  }
+
   async getRecipes(req, res) {
     try {
 
@@ -564,7 +842,8 @@ class SilarWebServer {
                  rp.accel_x, rp.accel_y, rp.humidity_offset, rp.temperature_offset,
                  rp.dipping_wait0, rp.dipping_wait1, rp.dipping_wait2, rp.dipping_wait3, rp.transfer_wait,
                  rp.cycles, rp.fan, rp.except_dripping1, rp.except_dripping2, rp.except_dripping3, rp.except_dripping4,
-                 rp.dip_start_position, rp.dipping_length, rp.transfer_speed, rp.dip_speed
+                 rp.dip_start_position, rp.dipping_length, rp.transfer_speed, rp.dip_speed,
+                 rp.pos_y1, rp.pos_y2, rp.pos_y3, rp.pos_y4
           FROM recipes r 
           LEFT JOIN users u ON r.created_by_user_id = u.id 
           LEFT JOIN recipe_parameters rp ON r.id = rp.recipe_id
@@ -579,7 +858,8 @@ class SilarWebServer {
                  rp.accel_x, rp.accel_y, rp.humidity_offset, rp.temperature_offset,
                  rp.dipping_wait0, rp.dipping_wait1, rp.dipping_wait2, rp.dipping_wait3, rp.transfer_wait,
                  rp.cycles, rp.fan, rp.except_dripping1, rp.except_dripping2, rp.except_dripping3, rp.except_dripping4,
-                 rp.dip_start_position, rp.dipping_length, rp.transfer_speed, rp.dip_speed
+                 rp.dip_start_position, rp.dipping_length, rp.transfer_speed, rp.dip_speed,
+                 rp.pos_y1, rp.pos_y2, rp.pos_y3, rp.pos_y4
           FROM recipes r 
           LEFT JOIN users u ON r.created_by_user_id = u.id 
           LEFT JOIN recipe_parameters rp ON r.id = rp.recipe_id
@@ -622,7 +902,13 @@ class SilarWebServer {
           dipStartPosition: row.dip_start_position || 0,
           dippingLength: row.dipping_length || 0,
           transferSpeed: row.transfer_speed || 0,
-          dipSpeed: row.dip_speed || 0
+          dipSpeed: row.dip_speed || 0,
+          // Posición de cada vaso, en mm desde el home de Y. 0 = usar la
+          // geometría calibrada de la máquina, que es el caso habitual.
+          posY1: row.pos_y1 || 0,
+          posY2: row.pos_y2 || 0,
+          posY3: row.pos_y3 || 0,
+          posY4: row.pos_y4 || 0
           // Variables Pendiente (COMENTADAS - No implementadas)
           // setTemp1: row.set_temp1 || 0,
           // setTemp2: row.set_temp2 || 0,
@@ -639,6 +925,17 @@ class SilarWebServer {
         }
       }));
 
+      // Las recetas por etapas llevan además su secuencia. Las normales no
+      // pasan por aquí: si ninguna receta del listado es por etapas, no hay
+      // consulta extra que hacer.
+      const idsPorEtapas = formattedRows.filter(r => r.is_staged).map(r => r.id);
+      if (idsPorEtapas.length > 0) {
+        const etapasPorReceta = await this.getStagesForRecipes(idsPorEtapas);
+        for (const receta of formattedRows) {
+          if (receta.is_staged) receta.stages = etapasPorReceta.get(receta.id) || [];
+        }
+      }
+
       res.json(formattedRows);
     } catch (error) {
       logger.apiError('GET', '/api/recipes', error, req.user?.id);
@@ -648,7 +945,18 @@ class SilarWebServer {
 
   async saveRecipe(req, res) {
     try {
-      const { name, description, type, parameters } = req.body;
+      const { name, description, type } = req.body;
+
+      // Una receta por etapas trae su secuencia en `stages`; una receta normal
+      // trae un único juego de parámetros, exactamente como hasta ahora.
+      const { esPorEtapas, etapas, error: errorEtapas } = this.extractStages(req.body);
+      if (errorEtapas) {
+        return res.status(400).json({ success: false, message: errorEtapas });
+      }
+
+      // Los parámetros que se guardan en recipe_parameters: los de la receta
+      // normal, o el resumen calculado si es por etapas.
+      const parameters = esPorEtapas ? this.buildStagedSummary(etapas) : req.body.parameters;
 
       // Validar datos de receta
       const recipeValidation = validator.validateRecipe({ name, description, type });
@@ -678,16 +986,21 @@ class SilarWebServer {
       try {
         // Insertar receta
         const [result] = await this.dbConnection.execute(
-          'INSERT INTO recipes (name, description, type, created_by_user_id, created_at) VALUES (?, ?, ?, ?, NOW())',
+          'INSERT INTO recipes (name, description, type, created_by_user_id, is_staged, created_at) VALUES (?, ?, ?, ?, ?, NOW())',
           [
             name,
             description || 'Receta creada por usuario',
             type || 'A',
-            req.user.id
+            req.user.id,
+            esPorEtapas ? 1 : 0
           ]
         );
 
         const recipeId = result.insertId;
+
+        if (esPorEtapas) {
+          await this.replaceRecipeStages(recipeId, etapas);
+        }
 
         // Insertar parámetros (incluyendo tiempos de inmersión y ciclos)
         // Convertir valores booleanos a 0/1 para MySQL
@@ -702,8 +1015,9 @@ class SilarWebServer {
            (recipe_id, duration, temperature, velocity_x, velocity_y, accel_x, accel_y, humidity_offset, temperature_offset,
             dipping_wait0, dipping_wait1, dipping_wait2, dipping_wait3, transfer_wait,
             cycles, fan, except_dripping1, except_dripping2, except_dripping3, except_dripping4,
-            dip_start_position, dipping_length, transfer_speed, dip_speed) 
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            dip_start_position, dipping_length, transfer_speed, dip_speed,
+            pos_y1, pos_y2, pos_y3, pos_y4)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
           [
             recipeId,
             parameters?.duration || 0,
@@ -731,7 +1045,12 @@ class SilarWebServer {
             parameters?.dipStartPosition || 0,
             parameters?.dippingLength || 0,
             parameters?.transferSpeed || 0,
-            parameters?.dipSpeed || 0
+            parameters?.dipSpeed || 0,
+            // Posiciones de los vasos de esta receta (mm desde el home de Y)
+            parameters?.posY1 || 0,
+            parameters?.posY2 || 0,
+            parameters?.posY3 || 0,
+            parameters?.posY4 || 0
           ]
         );
 
@@ -742,7 +1061,9 @@ class SilarWebServer {
 
         res.json({
           success: true,
-          message: 'Receta guardada correctamente',
+          message: esPorEtapas
+            ? `Receta por etapas guardada correctamente (${etapas.length} etapas)`
+            : 'Receta guardada correctamente',
           recipeId: recipeId
         });
       } catch (error) {
@@ -762,7 +1083,14 @@ class SilarWebServer {
   async updateRecipe(req, res) {
     try {
       const { id } = req.params;
-      const { name, description, type, parameters } = req.body;
+      const { name, description, type } = req.body;
+
+      const { esPorEtapas, etapas, error: errorEtapas } = this.extractStages(req.body);
+      if (errorEtapas) {
+        return res.status(400).json({ success: false, message: errorEtapas });
+      }
+
+      const parameters = esPorEtapas ? this.buildStagedSummary(etapas) : req.body.parameters;
 
       // Verificar conexión a la base de datos
       if (!this.dbConnection) {
@@ -829,14 +1157,20 @@ class SilarWebServer {
       try {
         // Actualizar la receta
         await this.dbConnection.execute(
-          'UPDATE recipes SET name = ?, description = ?, type = ?, updated_at = NOW() WHERE id = ?',
+          'UPDATE recipes SET name = ?, description = ?, type = ?, is_staged = ?, updated_at = NOW() WHERE id = ?',
           [
             name,
             description || recipe.description,
             type || recipe.type,
+            esPorEtapas ? 1 : 0,
             recipeId
           ]
         );
+
+        // La lista de etapas se reemplaza entera. Si la receta dejó de ser por
+        // etapas, el DELETE se lleva las que tenía: quedarían invisibles en el
+        // formulario pero se ejecutarían igual.
+        await this.replaceRecipeStages(recipeId, esPorEtapas ? etapas : []);
 
         // Actualizar o insertar parámetros (incluyendo tiempos de inmersión y ciclos)
         // Convertir valores booleanos a 0/1 para MySQL
@@ -873,12 +1207,17 @@ class SilarWebServer {
           parameters?.dipStartPosition || 0,
           parameters?.dippingLength || 0,
           parameters?.transferSpeed || 0,
-          parameters?.dipSpeed || 0
+          parameters?.dipSpeed || 0,
+          // Posiciones de los vasos de esta receta (mm desde el home de Y)
+          parameters?.posY1 || 0,
+          parameters?.posY2 || 0,
+          parameters?.posY3 || 0,
+          parameters?.posY4 || 0
         ];
 
         // Log para depuración
         logger.debug(`Actualizando parámetros de receta ${recipeId}`, {
-          columnCount: 24,
+          columnCount: 28,
           valueCount: paramsArray.length,
           params: paramsArray
         });
@@ -888,8 +1227,9 @@ class SilarWebServer {
            (recipe_id, duration, temperature, velocity_x, velocity_y, accel_x, accel_y, humidity_offset, temperature_offset,
             dipping_wait0, dipping_wait1, dipping_wait2, dipping_wait3, transfer_wait,
             cycles, fan, except_dripping1, except_dripping2, except_dripping3, except_dripping4,
-            dip_start_position, dipping_length, transfer_speed, dip_speed) 
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            dip_start_position, dipping_length, transfer_speed, dip_speed,
+            pos_y1, pos_y2, pos_y3, pos_y4)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
            ON DUPLICATE KEY UPDATE
            duration = VALUES(duration),
            temperature = VALUES(temperature),
@@ -914,6 +1254,10 @@ class SilarWebServer {
            dipping_length = VALUES(dipping_length),
            transfer_speed = VALUES(transfer_speed),
            dip_speed = VALUES(dip_speed),
+           pos_y1 = VALUES(pos_y1),
+           pos_y2 = VALUES(pos_y2),
+           pos_y3 = VALUES(pos_y3),
+           pos_y4 = VALUES(pos_y4),
            updated_at = NOW()`,
           paramsArray
         );
@@ -931,6 +1275,8 @@ class SilarWebServer {
             name,
             description: description || recipe.description,
             type: type || recipe.type,
+            is_staged: esPorEtapas,
+            stages: esPorEtapas ? etapas : undefined,
             parameters,
             updated_at: new Date().toISOString()
           }
@@ -1044,6 +1390,31 @@ class SilarWebServer {
       database: this.dbConnection ? true : false,
       timestamp: new Date().toISOString()
     });
+  }
+
+  /**
+   * Indica si hay una receta corriendo o en pausa.
+   * Público y sin datos sensibles: lo consulta el updater de Electron para no
+   * reiniciar la aplicación a media corrida. Ante cualquier duda responde
+   * ocupado, porque interrumpir un proceso lo aborta.
+   */
+  async getSystemBusy(req, res) {
+    try {
+      if (!this.dbConnection) {
+        return res.json({ busy: true, reason: 'database_unavailable' });
+      }
+
+      await this.ensureDatabaseConnection();
+
+      const [rows] = await this.dbConnection.execute(
+        `SELECT COUNT(*) AS total FROM processes WHERE status IN ('running', 'paused')`
+      );
+
+      res.json({ busy: rows[0].total > 0 });
+    } catch (error) {
+      logger.error('Error consultando ocupación del sistema:', error);
+      res.json({ busy: true, reason: 'error' });
+    }
   }
 
   async getArduinoPorts(req, res) {
@@ -1199,6 +1570,176 @@ class SilarWebServer {
     }
   }
 
+  /**
+   * Puerta común de las rutas de calibración: administrador y Arduino conectado.
+   * Devuelve true si la petición puede seguir; si no, ya ha respondido.
+   */
+  guardCalibration(req, res) {
+    if (req.user?.role !== 'admin') {
+      res.status(403).json({
+        success: false,
+        message: 'Solo los administradores pueden calibrar la máquina'
+      });
+      return false;
+    }
+
+    if (!this.arduinoController?.isConnected) {
+      res.status(503).json({
+        success: false,
+        message: 'Arduino no conectado'
+      });
+      return false;
+    }
+
+    return true;
+  }
+
+  async getZCalibration(req, res) {
+    if (!this.guardCalibration(req, res)) return;
+
+    try {
+      const calibration = await this.arduinoController.getZCalibration();
+      res.json({ success: true, calibration });
+    } catch (error) {
+      logger.error('Error leyendo calibración de Z:', error);
+      res.status(500).json({ success: false, message: error.message });
+    }
+  }
+
+  async updateZCalibration(req, res) {
+    if (!this.guardCalibration(req, res)) return;
+
+    try {
+      const calibration = await this.arduinoController.setZCalibration(req.body || {});
+      logger.info('Calibración de Z aplicada', { user: req.user.username, calibration });
+      res.json({
+        success: true,
+        message: 'Calibración aplicada. Verifícala antes de guardarla.',
+        calibration
+      });
+    } catch (error) {
+      logger.error('Error aplicando calibración de Z:', error);
+      res.status(400).json({ success: false, message: error.message });
+    }
+  }
+
+  async saveZCalibration(req, res) {
+    if (!this.guardCalibration(req, res)) return;
+
+    try {
+      const calibration = await this.arduinoController.saveZCalibration();
+      logger.warn('Calibración de Z guardada en EEPROM', { user: req.user.username, calibration });
+      res.json({ success: true, message: 'Calibración guardada en la máquina', calibration });
+    } catch (error) {
+      logger.error('Error guardando calibración de Z:', error);
+      res.status(500).json({ success: false, message: error.message });
+    }
+  }
+
+  async resetZCalibration(req, res) {
+    if (!this.guardCalibration(req, res)) return;
+
+    try {
+      const calibration = await this.arduinoController.resetZCalibration();
+      logger.warn('Calibración de Z restaurada a fábrica', { user: req.user.username });
+      res.json({ success: true, message: 'Calibración restaurada a valores de fábrica', calibration });
+    } catch (error) {
+      logger.error('Error restaurando calibración de Z:', error);
+      res.status(500).json({ success: false, message: error.message });
+    }
+  }
+
+  async getYCalibration(req, res) {
+    if (!this.guardCalibration(req, res)) return;
+
+    try {
+      const calibration = await this.arduinoController.getYCalibration();
+      res.json({ success: true, calibration });
+    } catch (error) {
+      logger.error('Error leyendo geometría de Y:', error);
+      res.status(500).json({ success: false, message: error.message });
+    }
+  }
+
+  async updateYCalibration(req, res) {
+    if (!this.guardCalibration(req, res)) return;
+
+    try {
+      const calibration = await this.arduinoController.setYCalibration(req.body || {});
+      logger.info('Geometría de Y aplicada', { user: req.user.username, calibration });
+      res.json({
+        success: true,
+        message: 'Geometría aplicada. Verifícala antes de guardarla.',
+        calibration
+      });
+    } catch (error) {
+      logger.error('Error aplicando geometría de Y:', error);
+      res.status(400).json({ success: false, message: error.message });
+    }
+  }
+
+  async saveYCalibration(req, res) {
+    if (!this.guardCalibration(req, res)) return;
+
+    try {
+      const calibration = await this.arduinoController.saveYCalibration();
+      logger.warn('Geometría de Y guardada en EEPROM', { user: req.user.username, calibration });
+      res.json({ success: true, message: 'Geometría guardada en la máquina', calibration });
+    } catch (error) {
+      logger.error('Error guardando geometría de Y:', error);
+      res.status(500).json({ success: false, message: error.message });
+    }
+  }
+
+  async resetYCalibration(req, res) {
+    if (!this.guardCalibration(req, res)) return;
+
+    try {
+      const calibration = await this.arduinoController.resetYCalibration();
+      logger.warn('Geometría de Y restaurada a fábrica', { user: req.user.username });
+      res.json({ success: true, message: 'Geometría restaurada a valores de fábrica', calibration });
+    } catch (error) {
+      logger.error('Error restaurando geometría de Y:', error);
+      res.status(500).json({ success: false, message: error.message });
+    }
+  }
+
+  async gotoZHeight(req, res) {
+    if (!this.guardCalibration(req, res)) return;
+
+    try {
+      const result = await this.arduinoController.moveZToHeight(req.body?.heightMm);
+      res.json({ success: true, message: 'Movimiento completado', result });
+    } catch (error) {
+      logger.error('Error moviendo Z a altura:', error);
+      res.status(500).json({ success: false, message: error.message });
+    }
+  }
+
+  async jogZCalibration(req, res) {
+    if (!this.guardCalibration(req, res)) return;
+
+    try {
+      const result = await this.arduinoController.jogZSteps(req.body?.steps);
+      res.json({ success: true, result });
+    } catch (error) {
+      logger.error('Error en jog de calibración de Z:', error);
+      res.status(500).json({ success: false, message: error.message });
+    }
+  }
+
+  async homeZCalibration(req, res) {
+    if (!this.guardCalibration(req, res)) return;
+
+    try {
+      const result = await this.arduinoController.executeHome();
+      res.json({ success: true, result });
+    } catch (error) {
+      logger.error('Error ejecutando home desde calibración:', error);
+      res.status(500).json({ success: false, message: error.message });
+    }
+  }
+
   async getFlashInfo(req, res) {
     // Funcionalidad de flash no disponible - flasher module no incluido
     res.json({
@@ -1348,6 +1889,23 @@ class SilarWebServer {
       }
 
       const recipe = recipes[0];
+
+      // Las etapas, si la receta es por etapas. Van al Arduino una por una y de
+      // ahí en adelante la secuencia la lleva el firmware: el PC no interviene
+      // entre una etapa y la siguiente.
+      let etapas = [];
+      if (recipe.is_staged) {
+        const etapasPorReceta = await this.getStagesForRecipes([validRecipeId]);
+        etapas = etapasPorReceta.get(validRecipeId) || [];
+
+        if (etapas.length === 0) {
+          return res.status(400).json({
+            success: false,
+            message: 'La receta está marcada como receta por etapas pero no tiene ninguna etapa configurada'
+          });
+        }
+      }
+
       const parameters = {
         duration: Number(recipe.duration) || 0,
         temperature: Number(recipe.temperature) || 0,
@@ -1369,8 +1927,23 @@ class SilarWebServer {
         dipStartPosition: Number(recipe.dip_start_position) || 0,
         dippingLength: Number(recipe.dipping_length) || 0,
         transferSpeed: Number(recipe.transfer_speed) || 0,
-        dipSpeed: Number(recipe.dip_speed) || 0
+        dipSpeed: Number(recipe.dip_speed) || 0,
+        posY1: Number(recipe.pos_y1) || 0,
+        posY2: Number(recipe.pos_y2) || 0,
+        posY3: Number(recipe.pos_y3) || 0,
+        posY4: Number(recipe.pos_y4) || 0
       };
+
+      // Para una receta por etapas, lo de arriba es el resumen (duración y
+      // ciclos totales); las etapas viajan aparte para que la pantalla de
+      // monitoreo pueda mostrar cuál se está ejecutando. Se guardan en
+      // processes.parameters junto con el resto, así que quedan registradas tal
+      // y como se corrieron aunque la receta se edite después.
+      if (recipe.is_staged) {
+        parameters.isStaged = true;
+        parameters.totalStages = etapas.length;
+        parameters.stages = etapas;
+      }
 
       // Verificar conexión con Arduino antes de iniciar proceso
       if (!this.arduinoController.isConnected) {
@@ -1392,6 +1965,18 @@ class SilarWebServer {
 
       const processId = result.insertId;
 
+      // Publicar los parámetros de la receta: las tarjetas de monitoreo los
+      // esperan con estos mismos nombres (dippingWait0, transferSpeed, ...)
+      this.io.emit('process-parameters', parameters);
+
+      // La etapa la anuncia el Arduino al entrar en cada una, pero la primera se
+      // adelanta aquí: entre el arranque y ese anuncio hay todo el posicionado
+      // inicial de Z, y la pantalla no debe quedarse en blanco mientras tanto.
+      this.currentStage = recipe.is_staged
+        ? { stage: 1, totalStages: etapas.length, cycles: Number(etapas[0]?.cycles) || 0 }
+        : null;
+      if (this.currentStage) this.io.emit('process-stage', this.currentStage);
+
       // Obtener el número de proceso generado
       const [processData] = await this.dbConnection.execute(
         `SELECT process_number FROM processes WHERE id = ?`,
@@ -1406,7 +1991,11 @@ class SilarWebServer {
           logger.info('Arduino configurado en modo automático', { processId, recipeId: validRecipeId });
 
           // Enviar parámetros de la receta al Arduino para iniciar el proceso automático
-          await this.arduinoController.startRecipe(parameters);
+          if (recipe.is_staged) {
+            await this.arduinoController.startStagedRecipe(etapas);
+          } else {
+            await this.arduinoController.startRecipe(parameters);
+          }
           logger.info('Proceso automático iniciado en Arduino', { processId, recipeId: validRecipeId, parameters });
 
         } catch (arduinoError) {
@@ -1619,13 +2208,16 @@ class SilarWebServer {
 
       // Actualizar proceso a detenido
       await this.dbConnection.execute(
-        `UPDATE processes 
-         SET status = 'cancelled', 
-             end_time = NOW(), 
-             duration_minutes = ? 
+        `UPDATE processes
+         SET status = 'cancelled',
+             end_time = NOW(),
+             duration_minutes = ?
          WHERE id = ?`,
         [durationMinutes, process.id]
       );
+
+      this.currentStage = null;
+      this.io.emit('process-stage', null);
 
       logger.info('Proceso detenido', {
         processId: process.id,

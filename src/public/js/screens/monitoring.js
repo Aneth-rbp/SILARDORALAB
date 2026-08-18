@@ -112,27 +112,17 @@ class MonitoringScreen {
         }
 
         if (typeof value === 'number') {
-            // Format based on variable type
-            if (varName.includes('Temp') || varName.includes('temp')) {
-                return `${value.toFixed(1)}°C`;
-            }
-            if (varName.includes('Humidity') || varName.includes('humidity')) {
-                return `${value.toFixed(1)}%`;
-            }
-            if (varName.includes('Speed') || varName.includes('Velocity')) {
-                return `${value.toFixed(1)} rpm`;
-            }
-            if (varName.includes('Position') || varName.includes('Length')) {
-                return `${value.toFixed(1)} mm`;
-            }
-            if (varName.includes('Wait') || varName.includes('Time')) {
-                return `${value} ms`;
-            }
-            if (varName.includes('cycles') || varName.includes('Count')) {
-                return `${Math.floor(value)}`;
+            // La unidad ya se pinta en el span .variable-unit de la tarjeta;
+            // añadirla también aquí la duplicaba en pantalla ("25.5°C °C")
+            if (varName === 'timeStamp') {
+                return new Date(value).toLocaleTimeString('es-ES');
             }
 
-            return value.toFixed(2);
+            if (Number.isInteger(value)) {
+                return String(value);
+            }
+
+            return value.toFixed(1);
         }
 
         return String(value);
@@ -313,17 +303,21 @@ class MonitoringScreen {
             // Posición y Movimiento
             { name: 'dipStartPosition', label: 'Posición Inicial Z', unit: 'mm', category: 'position', description: 'Posición inicial Z con sustrato' },
             { name: 'dippingLength', label: 'Longitud de Inmersión', unit: 'mm', category: 'position', description: 'Longitud de inmersión de sustrato' },
-            { name: 'travelY', label: 'Posición Y', unit: 'mm', category: 'position', description: 'Indicador de posición en Y' },
+            // travelY / setY* vienen del firmware en pasos del motor, no en mm
+            { name: 'travelY', label: 'Posición Y', unit: 'pasos', category: 'position', description: 'Indicador de posición en Y' },
+            { name: 'travelZ', label: 'Altura Z', unit: 'mm', category: 'position', description: 'Altura actual del portamuestras' },
             { name: 'setHomeX', label: 'Home X', unit: 'mm', category: 'position', description: 'Posición inicial para pruebas del eje X' },
-            { name: 'setHomeY', label: 'Home Y', unit: 'mm', category: 'position', description: 'Posición inicial para pruebas del eje Y' },
-            { name: 'setY1', label: 'Posición Y1', unit: 'mm', category: 'position', description: 'Posición deseada de Y1' },
-            { name: 'setY2', label: 'Posición Y2', unit: 'mm', category: 'position', description: 'Posición deseada de Y2' },
-            { name: 'setY3', label: 'Posición Y3', unit: 'mm', category: 'position', description: 'Posición deseada de Y3' },
-            { name: 'setY4', label: 'Posición Y4', unit: 'mm', category: 'position', description: 'Posición deseada de Y4' },
+            { name: 'setHomeY', label: 'Home Y', unit: 'pasos', category: 'position', description: 'Posición inicial para pruebas del eje Y' },
+            { name: 'setY1', label: 'Posición Y1', unit: 'pasos', category: 'position', description: 'Posición deseada de Y1' },
+            { name: 'setY2', label: 'Posición Y2', unit: 'pasos', category: 'position', description: 'Posición deseada de Y2' },
+            { name: 'setY3', label: 'Posición Y3', unit: 'pasos', category: 'position', description: 'Posición deseada de Y3' },
+            { name: 'setY4', label: 'Posición Y4', unit: 'pasos', category: 'position', description: 'Posición deseada de Y4' },
 
             // Velocidades y Tiempo
-            { name: 'transferSpeed', label: 'Velocidad Y', unit: 'rpm', category: 'speed', description: 'Velocidad Y cambio de posición' },
-            { name: 'dipSpeed', label: 'Velocidad Z', unit: 'rpm', category: 'speed', description: 'Velocidad Z inmersión sustrato a solución' },
+            // Estas dos van en mm/s, no en rpm: es la unidad en la que se escriben
+            // en la receta y la que el firmware convierte a pasos del motor
+            { name: 'transferSpeed', label: 'Velocidad Y', unit: 'mm/s', category: 'speed', description: 'Velocidad Y de transferencia entre vasos, también en el regreso al vaso 1' },
+            { name: 'dipSpeed', label: 'Velocidad Z', unit: 'mm/s', category: 'speed', description: 'Velocidad Z de inmersión y de emersión del sustrato' },
             { name: 'setStir1', label: 'Velocidad Removedor 1', unit: 'rpm', category: 'speed', description: 'Velocidad del removedor en la parrilla 1' },
             { name: 'setStir2', label: 'Velocidad Removedor 2', unit: 'rpm', category: 'speed', description: 'Velocidad del removedor en la parrilla 2' },
             { name: 'setStir3', label: 'Velocidad Removedor 3', unit: 'rpm', category: 'speed', description: 'Velocidad del removedor en la parrilla 3' },
@@ -351,8 +345,10 @@ class MonitoringScreen {
             // Control de Proceso
             { name: 'cycles', label: 'Ciclos Restantes', unit: '', category: 'process', description: 'Cantidad de ciclos por prueba' },
             { name: 'cycleCount', label: 'Contador Ciclos', unit: '', category: 'process', description: 'Contador de ciclos durante la prueba' },
-            { name: 'timeStamp', label: 'Tiempo Global', unit: 'ms', category: 'process', description: 'Registro de tiempo global en el sistema' },
+            { name: 'stage', label: 'Etapa', unit: '', category: 'process', description: 'Etapa en curso de una receta por etapas (n/N)' },
+            { name: 'timeStamp', label: 'Última Lectura', unit: '', category: 'process', description: 'Hora de la última trama recibida del Arduino' },
             { name: 'fan', label: 'Ventilador', unit: '', category: 'process', description: 'Ventilador encendido/apagado' },
+            { name: 'lamp', label: 'Lámpara', unit: '', category: 'process', description: 'Lámpara encendida/apagada' },
             { name: 'exceptDripping1', label: 'Excluir Inmersión Y1', unit: '', category: 'process', description: 'Excluir inmersión en Y1' },
             { name: 'exceptDripping2', label: 'Excluir Inmersión Y2', unit: '', category: 'process', description: 'Excluir inmersión en Y2' },
             { name: 'exceptDripping3', label: 'Excluir Inmersión Y3', unit: '', category: 'process', description: 'Excluir inmersión en Y3' },

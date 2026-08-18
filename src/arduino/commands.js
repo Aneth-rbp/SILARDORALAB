@@ -21,6 +21,15 @@ const ARDUINO_COMMANDS = {
     START_RECIPE: 'START_RECIPE:',  // Iniciar proceso automático con parámetros JSON
     PAUSE: 'PAUSE',                 // Pausar proceso automático
     RESUME: 'RESUME',               // Reanudar proceso automático
+
+    // Receta por etapas: varios tramos encadenados en una sola corrida. Se
+    // cargan de uno en uno (RECIPE_BEGIN, un ADD_STAGE por etapa, RECIPE_START)
+    // porque el buffer serie del Arduino son 64 bytes y un comando con todas
+    // las etapas juntas no cabría. Cada etapa lleva el mismo JSON que
+    // START_RECIPE.
+    RECIPE_BEGIN: 'RECIPE_BEGIN',   // Vaciar la lista de etapas
+    ADD_STAGE: 'ADD_STAGE:',        // Agregar una etapa con parámetros JSON
+    RECIPE_START: 'RECIPE_START',   // Iniciar la secuencia de etapas cargada
     
     // Comandos de emergencia
     STOP: 'STOP',         // Paro de emergencia / Detener proceso
@@ -56,6 +65,10 @@ const ARDUINO_RESPONSES = {
     PROCESO_COMPLETADO: 'PROCESO_COMPLETADO',
     CICLO_INICIADO: 'CICLO_INICIADO',
     CICLO_COMPLETADO: 'CICLO_COMPLETADO',
+    RECETA_ETAPAS_INICIO: 'RECETA_ETAPAS_INICIO',
+    ETAPA_AGREGADA: 'ETAPA_AGREGADA',
+    ETAPA_INICIADA: 'ETAPA_INICIADA',
+    ETAPA_COMPLETADA: 'ETAPA_COMPLETADA',
     INMERSION_INICIADA: 'INMERSION_INICIADA',
     INMERSION_COMPLETADA: 'INMERSION_COMPLETADA',
     VENTILADOR_ACTIVADO: 'VENTILADOR_ACTIVADO',
@@ -91,8 +104,12 @@ const RESPONSE_PATTERNS = {
     HOME_Z: /Home Z\s+(encontrado|buscando)/i,
     LIMIT_Y: /Limite Y\s+(Min|Max)/i,
     LIMIT_Z: /Limite Z\s+(Min|Max)/i,
-    POSITION_Y: /Y:\s*(-?\d+)/,
-    POSITION_Z: /Z:\s*(-?\d+)/,
+    // Anclados: sin ^...$ tambien capturaban "Moviendo Y: -100" y el numero de
+    // pasos se interpretaba como posicion absoluta.
+    POSITION_Y: /^Y:\s*(-?\d+)$/,
+    POSITION_Z: /^Z:\s*(-?\d+)$/,
+    // "ETAPA_INICIADA: 2/3 Ciclos=6" -> etapa en curso y total de etapas.
+    ETAPA: /^ETAPA_(INICIADA|COMPLETADA):\s*(\d+)\/(\d+)/,
     EMERGENCY: /PARO DE EMERGENCIA/i,
     ERROR: /Error:/i
 };

@@ -1,0 +1,41 @@
+# Compila el instalador de Windows y lo publica como Release de GitHub.
+# Ese Release es el feed que consulta el updater de la app instalada en el
+# laboratorio, así que basta con etiquetar y empujar para que se actualice sola:
+#
+#   npm version patch      # sube la versión en package.json y crea el tag vX.Y.Z
+#   git push --follow-tags
+#
+# El tag debe coincidir con la versión de package.json.
+
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+jobs:
+  windows:
+    runs-on: windows-latest
+
+    permissions:
+      contents: write
+
+    steps:
+      - name: Descargar el repositorio
+        uses: actions/checkout@v4
+
+      - name: Preparar Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Instalar dependencias
+        run: npm ci
+
+      - name: Compilar y publicar
+        run: npx electron-builder --win --publish always
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -316,9 +316,16 @@ class ArduinoController extends EventEmitter {
             } else if (parsed.axis === 'Z') {
                 this.currentState.axisZ.atLimit = true;
                 this.currentState.axisZ.moving = false;
-                if (parsed.limit === 'MIN') {
+                // En Z el home está ARRIBA, así que las etiquetas del firmware van
+                // al revés que en Y. Se usa el mismo criterio que el parseo de
+                // STATUS más abajo: limitMax bloquea subir, limitMin bloquea bajar.
+                //   "Limite Z Home alcanzado" -> pin 14, tope de ARRIBA
+                //   "Limite Z Max alcanzado"  -> pin 15, tope de ABAJO
+                // Antes el tope de abajo marcaba limitMax y dejaba el eje sin poder
+                // subir para salir de él.
+                if (parsed.limit === 'MAX') {
                     this.currentState.axisZ.limitMin = true;
-                } else if (parsed.limit === 'MAX') {
+                } else if (parsed.limit === 'HOME' || parsed.limit === 'MIN') {
                     this.currentState.axisZ.limitMax = true;
                 }
             }
@@ -515,19 +522,30 @@ class ArduinoController extends EventEmitter {
     /**
      * Inicia un proceso automático con parámetros de receta
      */
-    async startRecipe(parameters) {
-        if (!this.isConnected) {
-            throw new Error('Arduino no conectado');
-        }
-
-        // Construir comando START_RECIPE con parámetros JSON
+    /**
+     * Arma el JSON de parámetros que entiende el firmware.
+     *
+     * Lo usan tanto la receta normal (START_RECIPE) como cada etapa de una
+     * receta por etapas (ADD_STAGE). Es el mismo juego de parámetros en los dos
+     * casos a propósito: una etapa es una receta normal, y si los defaults o el
+     * saneado se separaran, una etapa correría distinto a la receta equivalente.
+     */
+    construirParametrosReceta(parameters) {
         const numDippingLen = Number(parameters.dippingLength);
         const numTransSpeed = Number(parameters.transferSpeed);
         const numDipSpeed = Number(parameters.dipSpeed);
 
-        const dippingLen = (numDippingLen && numDippingLen > 100) ? numDippingLen : 10000;
-        const transSpeed = (numTransSpeed && numTransSpeed > 100) ? numTransSpeed : 1000;
-        const dippingSpeed = (numDipSpeed && numDipSpeed > 100) ? numDipSpeed : 1000;
+        const dippingLen = (numDippingLen && numDippingLen > 0) ? numDippingLen : 30;
+        // Las dos velocidades viajan en mm/s, tal cual las escribe el operador. La
+        // conversión a la unidad de los motores la hace el firmware en
+        // velocidadMMsAMicros(), único punto de traducción del sistema: aquí no se
+        // puede hacer porque la escala del eje Z es calibrable y vive en la EEPROM.
+        // Un 0 significa "aplica tu propio default". Antes se sustituía por 1000,
+        // que en la unidad vieja eran microsegundos; leído como mm/s sería una
+        // velocidad imposible, y el filtro > 100 descartaba justamente los valores
+        // válidos (una emersión de 3 mm/s se convertía en 1000).
+        const transSpeed = numTransSpeed > 0 ? numTransSpeed : 0;
+        const dippingSpeed = numDipSpeed > 0 ? numDipSpeed : 0;
 
         const jsonParams = JSON.stringify({
             cycles: Number(parameters.cycles) || 1,
@@ -544,12 +562,69 @@ class ArduinoController extends EventEmitter {
             dippingLength: dippingLen,
             transferSpeed: transSpeed,
             dipSpeed: dippingSpeed,
+            // Posición de cada vaso en mm, medida desde el home de Y. Es un ajuste
+            // de la receta por encima de la geometría calibrada de la máquina, para
+            // un montaje puntual que no justifica recalibrar el banco. 0 (o vacío)
+            // = usar la posición calibrada, que es lo normal.
+            posY1: Number(parameters.posY1) || 0,
+            posY2: Number(parameters.posY2) || 0,
+            posY3: Number(parameters.posY3) || 0,
+            posY4: Number(parameters.posY4) || 0,
             fan: parameters.fan || false
         });
 
-        const command = `START_RECIPE:${jsonParams}`;
+        return jsonParams;
+    }
+
+    async startRecipe(parameters) {
+        if (!this.isConnected) {
+            throw new Error('Arduino no conectado');
+        }
+
+        const command = `START_RECIPE:${this.construirParametrosReceta(parameters)}`;
         logger.info('Iniciando proceso automático en Arduino', { parameters });
         return await this.sendCommand(command, false, 10000);
+    }
+
+    /**
+     * Inicia una receta por etapas: varios tramos encadenados en una sola
+     * corrida (5 ciclos de una manera, luego 6 de otra, luego 15 de otra).
+     *
+     * Las etapas se cargan una por una y no en un único comando gigante porque
+     * el buffer serie del Arduino son 64 bytes: cada ADD_STAGE ocupa lo mismo
+     * que el START_RECIPE que ya funciona. Se espera el acuse de cada etapa
+     * antes de mandar la siguiente, que es lo que evita el desbordamiento.
+     *
+     * Una vez cargadas, la secuencia entera vive en el Arduino: el PC no
+     * interviene entre etapa y etapa, así que un cuelgue o una desconexión del
+     * puerto no dejan la corrida abandonada a medias.
+     */
+    async startStagedRecipe(stages) {
+        if (!this.isConnected) {
+            throw new Error('Arduino no conectado');
+        }
+
+        if (!Array.isArray(stages) || stages.length === 0) {
+            throw new Error('La receta por etapas no tiene etapas');
+        }
+
+        logger.info('Cargando receta por etapas en Arduino', { etapas: stages.length });
+
+        await this.sendCommandAwaitLine('RECIPE_BEGIN', /^RECETA_ETAPAS_INICIO/, 5000);
+
+        for (let i = 0; i < stages.length; i++) {
+            const json = this.construirParametrosReceta(stages[i]);
+            // El firmware imprime PARAMETROS_RECIBIDOS y sus avisos antes del
+            // acuse; sendCommandAwaitLine ignora todo lo que no case con el
+            // patrón, así que solo se espera al ETAPA_AGREGADA.
+            const acuse = await this.sendCommandAwaitLine(
+                `ADD_STAGE:${json}`, /^ETAPA_AGREGADA:/, 10000
+            );
+            logger.debug(`Etapa ${i + 1}/${stages.length} cargada`, { acuse });
+        }
+
+        logger.info('Iniciando receta por etapas en Arduino', { etapas: stages.length });
+        return await this.sendCommand('RECIPE_START', false, 10000);
     }
 
     /**
@@ -578,6 +653,289 @@ class ArduinoController extends EventEmitter {
             return response;
         } catch (error) {
             logger.error('Error solicitando estado:', error);
+            throw error;
+        }
+    }
+
+    /**
+     * Envía un comando y espera la primera línea CRUDA que encaje con un patrón.
+     *
+     * sendCommand(..., waitForResponse) resuelve con el primer evento 'data' que
+     * llegue, y como el firmware emite STATUS cada 500 ms casi siempre resuelve
+     * con la línea equivocada. Aquí se escucha 'raw' hasta encontrar la línea
+     * concreta que se está esperando.
+     */
+    async sendCommandAwaitLine(command, pattern, timeout = 5000) {
+        if (!this.isConnected) {
+            throw new Error('Arduino no conectado');
+        }
+
+        return new Promise((resolve, reject) => {
+            let timeoutHandle;
+
+            const rawHandler = (line) => {
+                const texto = String(line).trim();
+
+                // El firmware antiguo no conoce estos comandos y responde
+                // "Error: Comando desconocido: X". Sin esto se quedaba esperando
+                // hasta el timeout y el mensaje no decía nada útil.
+                if (/^Error:\s*Comando desconocido/i.test(texto)) {
+                    clearTimeout(timeoutHandle);
+                    this.removeListener('raw', rawHandler);
+                    reject(new Error(
+                        `El firmware de la placa no soporta "${command}". ` +
+                        'Sube la versión actual del sketch al Arduino.'
+                    ));
+                    return;
+                }
+
+                if (!pattern.test(texto)) return;
+                clearTimeout(timeoutHandle);
+                this.removeListener('raw', rawHandler);
+                resolve(texto);
+            };
+
+            timeoutHandle = setTimeout(() => {
+                this.removeListener('raw', rawHandler);
+                reject(new Error(`Timeout esperando respuesta a ${command}`));
+            }, timeout);
+
+            this.on('raw', rawHandler);
+
+            this.sendCommand(command).catch((err) => {
+                clearTimeout(timeoutHandle);
+                this.removeListener('raw', rawHandler);
+                reject(err);
+            });
+        });
+    }
+
+    /**
+     * Trocea una línea "PREFIJO:clave=valor,clave=valor" en un objeto de
+     * números. Devuelve null si la línea no lleva el prefijo esperado.
+     */
+    static parseCalibrationFields(line, prefijo) {
+        const texto = String(line).trim();
+        if (!texto.startsWith(`${prefijo}:`)) return null;
+
+        const campos = {};
+        texto.substring(prefijo.length + 1).split(',').forEach((par) => {
+            const [clave, valor] = par.split('=');
+            if (clave && valor !== undefined) campos[clave.trim()] = Number(valor);
+        });
+        return campos;
+    }
+
+    /**
+     * Convierte "CAL_Z:ppm=20.0000,home=275.00,min=25.00,fondo=-5000,z=-2500"
+     * en un objeto. Devuelve null si la línea no tiene el formato esperado.
+     */
+    static parseCalibrationLine(line) {
+        const campos = ArduinoController.parseCalibrationFields(line, 'CAL_Z');
+        if (!campos) return null;
+
+        return {
+            stepsPerMm: campos.ppm,
+            homeHeightMm: campos.home,
+            minHeightMm: campos.min,
+            floorSteps: campos.fondo,
+            currentSteps: campos.z
+        };
+    }
+
+    /**
+     * Lee la calibración del eje Z que el firmware tiene cargada ahora mismo.
+     */
+    async getZCalibration() {
+        const linea = await this.sendCommandAwaitLine('CAL_Z?', /^CAL_Z:/, 5000);
+        const calibracion = ArduinoController.parseCalibrationLine(linea);
+        if (!calibracion) {
+            throw new Error(`Respuesta de calibración no reconocida: ${linea}`);
+        }
+        return calibracion;
+    }
+
+    /**
+     * Aplica una calibración en la RAM del firmware (no sobrevive al reinicio).
+     * Los tres campos son opcionales: se envía solo lo que se quiere cambiar.
+     */
+    async setZCalibration({ stepsPerMm, homeHeightMm, minHeightMm } = {}) {
+        const campos = [];
+        if (Number.isFinite(Number(stepsPerMm))) campos.push(`ppm=${Number(stepsPerMm)}`);
+        if (Number.isFinite(Number(homeHeightMm))) campos.push(`home=${Number(homeHeightMm)}`);
+        if (Number.isFinite(Number(minHeightMm))) campos.push(`min=${Number(minHeightMm)}`);
+
+        if (campos.length === 0) {
+            throw new Error('No se indicó ningún valor de calibración');
+        }
+
+        logger.info('Aplicando calibración de Z', { stepsPerMm, homeHeightMm, minHeightMm });
+        const linea = await this.sendCommandAwaitLine(
+            `CAL_Z_SET:${campos.join(',')}`,
+            /^(CAL_Z:|CAL_Z_ERROR)/,
+            5000
+        );
+
+        if (linea.startsWith('CAL_Z_ERROR')) {
+            throw new Error(linea.replace(/^CAL_Z_ERROR:\s*/, ''));
+        }
+
+        return ArduinoController.parseCalibrationLine(linea);
+    }
+
+    /**
+     * Persiste en EEPROM la calibración que el firmware tiene cargada.
+     */
+    async saveZCalibration() {
+        logger.info('Guardando calibración de Z en EEPROM');
+        const linea = await this.sendCommandAwaitLine('CAL_Z_SAVE', /^CAL_Z:/, 5000);
+        return ArduinoController.parseCalibrationLine(linea);
+    }
+
+    /**
+     * Devuelve la calibración a los valores de fábrica del firmware.
+     */
+    async resetZCalibration() {
+        logger.warn('Restaurando calibración de Z a valores de fábrica');
+        const linea = await this.sendCommandAwaitLine('CAL_Z_RESET', /^CAL_Z:/, 5000);
+        return ArduinoController.parseCalibrationLine(linea);
+    }
+
+    /**
+     * Convierte "CAL_Y:ppm=76.3636,v1=0.00,v2=55.00,...,p1=0,p2=4200,...,y=0"
+     * en un objeto. Devuelve null si la línea no tiene el formato esperado.
+     *
+     * v1..v4 son las posiciones que el usuario edita (mm) y p1..p4 las mismas
+     * posiciones ya convertidas a pasos por el firmware. Se leen las dos: los mm
+     * para rellenar el formulario y los pasos para mostrar contra qué se compara
+     * el final de carrera, sin recalcular la conversión aquí.
+     */
+    static parseYCalibrationLine(line) {
+        const campos = ArduinoController.parseCalibrationFields(line, 'CAL_Y');
+        if (!campos) return null;
+
+        return {
+            stepsPerMm: campos.ppm,
+            vesselPositionsMm: [campos.v1, campos.v2, campos.v3, campos.v4],
+            positions: [campos.p1, campos.p2, campos.p3, campos.p4],
+            axisLimitSteps: campos.tope,
+            maxSpeedMms: campos.vmax,
+            currentSteps: campos.y
+        };
+    }
+
+    /**
+     * Lee la geometría del eje Y que el firmware tiene cargada ahora mismo.
+     */
+    async getYCalibration() {
+        const linea = await this.sendCommandAwaitLine('CAL_Y?', /^CAL_Y:/, 5000);
+        const calibracion = ArduinoController.parseYCalibrationLine(linea);
+        if (!calibracion) {
+            throw new Error(`Respuesta de geometría de Y no reconocida: ${linea}`);
+        }
+        return calibracion;
+    }
+
+    /**
+     * Aplica una geometría de Y en la RAM del firmware (no sobrevive al
+     * reinicio). Todos los campos son opcionales y cada vaso va por separado:
+     * mover un vaso no debe obligar a reescribir la posición de los otros tres,
+     * ni asumir que están igualmente espaciados.
+     */
+    async setYCalibration({ stepsPerMm, vesselPositionsMm } = {}) {
+        const campos = [];
+        if (Number.isFinite(Number(stepsPerMm))) campos.push(`ppm=${Number(stepsPerMm)}`);
+
+        const posiciones = Array.isArray(vesselPositionsMm) ? vesselPositionsMm : [];
+        posiciones.slice(0, 4).forEach((mm, i) => {
+            if (Number.isFinite(Number(mm))) campos.push(`v${i + 1}=${Number(mm)}`);
+        });
+
+        if (campos.length === 0) {
+            throw new Error('No se indicó ningún valor de geometría');
+        }
+
+        logger.info('Aplicando geometría de Y', { stepsPerMm, vesselPositionsMm });
+        const linea = await this.sendCommandAwaitLine(
+            `CAL_Y_SET:${campos.join(',')}`,
+            /^(CAL_Y:|CAL_Y_ERROR)/,
+            5000
+        );
+
+        if (linea.startsWith('CAL_Y_ERROR')) {
+            throw new Error(linea.replace(/^CAL_Y_ERROR:\s*/, ''));
+        }
+
+        return ArduinoController.parseYCalibrationLine(linea);
+    }
+
+    /**
+     * Persiste en EEPROM la geometría de Y que el firmware tiene cargada.
+     */
+    async saveYCalibration() {
+        logger.info('Guardando geometría de Y en EEPROM');
+        const linea = await this.sendCommandAwaitLine('CAL_Y_SAVE', /^CAL_Y:/, 5000);
+        return ArduinoController.parseYCalibrationLine(linea);
+    }
+
+    /**
+     * Devuelve la geometría de Y a los valores de fábrica del firmware.
+     */
+    async resetYCalibration() {
+        logger.warn('Restaurando geometría de Y a valores de fábrica');
+        const linea = await this.sendCommandAwaitLine('CAL_Y_RESET', /^CAL_Y:/, 5000);
+        return ArduinoController.parseYCalibrationLine(linea);
+    }
+
+    /**
+     * Jog de Z en pasos crudos que ESPERA a que el movimiento termine.
+     *
+     * moveAxisZ() vuelve en cuanto escribe en el puerto, lo que sirve para la
+     * pantalla manual pero no para calibrar: ahí hay que pedirle al operador que
+     * mida justo cuando el eje se ha parado. El firmware cierra el movimiento
+     * imprimiendo "Z: <posicion>".
+     */
+    async jogZSteps(steps) {
+        const pasos = Number(steps);
+        if (!Number.isInteger(pasos) || pasos === 0) {
+            throw new Error('Los pasos deben ser un entero distinto de cero');
+        }
+
+        logger.info(`Jog de calibración en Z: ${pasos} pasos`);
+        this.currentState.axisZ.moving = true;
+        try {
+            const linea = await this.sendCommandAwaitLine(`Z${pasos}`, /^Z:\s*-?\d+/, 60000);
+            this.currentState.axisZ.moving = false;
+            const posicion = Number(linea.split(':')[1]);
+            return { success: true, currentSteps: posicion };
+        } catch (error) {
+            this.currentState.axisZ.moving = false;
+            throw error;
+        }
+    }
+
+    /**
+     * Lleva el eje Z a una altura absoluta sobre el suelo, en mm.
+     * Es el movimiento de verificación de la calibración.
+     */
+    async moveZToHeight(heightMm) {
+        const altura = Number(heightMm);
+        if (!Number.isFinite(altura)) {
+            throw new Error('Altura inválida');
+        }
+
+        logger.info(`Moviendo Z a ${altura} mm sobre el suelo`);
+        this.currentState.axisZ.moving = true;
+        try {
+            const linea = await this.sendCommandAwaitLine(
+                `GOTO_MM:${altura}`,
+                /^GOTO_MM_ALCANZADO:/,
+                60000
+            );
+            this.currentState.axisZ.moving = false;
+            return { success: true, response: linea };
+        } catch (error) {
+            this.currentState.axisZ.moving = false;
             throw error;
         }
     }

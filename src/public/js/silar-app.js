@@ -290,6 +290,23 @@ class SilarApp {
             this.socket.on('process-update', (data) => {
                 this.updateProcessData(data);
             });
+
+            // Parámetros de la receta en curso: sus claves ya coinciden con los
+            // data-variable de las tarjetas de monitoreo, así que se propagan
+            // tal cual. El servidor los emite al iniciar un proceso y también
+            // al conectarse un cliente, para que un F5 no vacíe las tarjetas.
+            this.socket.on('process-parameters', (parameters) => {
+                this.handleProcessParameters(parameters);
+            });
+
+            // Etapa en curso de una receta por etapas. El Arduino la anuncia al
+            // entrar en cada etapa y el servidor la repite al conectarse un
+            // cliente, así que recargar la pantalla a media corrida no deja al
+            // operador sin saber por dónde va la secuencia. Llega null cuando el
+            // proceso termina o se detiene.
+            this.socket.on('process-stage', (etapa) => {
+                this.handleProcessStage(etapa);
+            });
         } catch (error) {
             this.updateSystemStatus({ websocket: false });
         }
@@ -442,15 +459,115 @@ class SilarApp {
                 parsed = data;
             }
 
-            this.processData.variables = { ...this.processData.variables, ...parsed };
-            
+            // El parser del servidor entrega { type, positionY, limitMaxY, ... },
+            // pero las tarjetas de monitoreo usan otros nombres (travelY,
+            // finCarreraY, ...). Sin esta traducción las tarjetas nunca
+            // encuentran su valor y se quedan en "--".
+            const detail = { ...parsed, ...this.mapArduinoVariables(parsed) };
+
+            this.processData.variables = { ...this.processData.variables, ...detail };
+
             // Emitir evento para que las pantallas se actualicen
             document.dispatchEvent(new CustomEvent('arduino-data-update', {
-                detail: parsed
+                detail: detail
             }));
         } catch (error) {
             console.error('Error procesando datos del Arduino:', error);
         }
+    }
+
+    /**
+     * Propaga los parámetros de la receta en curso a las pantallas.
+     * Son valores de configuración (tiempos, velocidades, ciclos, exclusiones)
+     * que el sistema ya tenía en base de datos pero nunca llegaban al monitoreo.
+     */
+    handleProcessStage(etapa) {
+        this.processData.currentStage = etapa || null;
+
+        // La tarjeta "stage" de Monitoreo se alimenta como cualquier otra
+        // variable; la pantalla de Proceso escucha el evento con el detalle.
+        document.dispatchEvent(new CustomEvent('arduino-data-update', {
+            detail: { stage: etapa ? `${etapa.stage}/${etapa.totalStages}` : '--' }
+        }));
+
+        document.dispatchEvent(new CustomEvent('process-stage-changed', {
+            detail: etapa || null
+        }));
+    }
+
+    handleProcessParameters(parameters) {
+        if (!parameters || typeof parameters !== 'object') return;
+
+        this.processData.variables = { ...this.processData.variables, ...parameters };
+
+        document.dispatchEvent(new CustomEvent('arduino-data-update', {
+            detail: parameters
+        }));
+    }
+
+    /**
+     * Traduce los datos parseados del Arduino a los nombres de variable que
+     * usan las tarjetas de la pantalla de Monitoreo (atributo data-variable).
+     * Solo se mapea lo que el firmware realmente reporta; las variables sin
+     * hardware asociado (parrillas, removedores, puerta, eje X) se quedan sin
+     * valor a propósito.
+     */
+    mapArduinoVariables(parsed) {
+        if (!parsed || typeof parsed !== 'object') return {};
+
+        const vars = {};
+
+        switch (parsed.type) {
+            case 'status':
+                if (parsed.positionY !== undefined) vars.travelY = parsed.positionY;
+                if (parsed.positionZmm !== undefined) vars.travelZ = parsed.positionZmm;
+                if (parsed.lamp !== undefined) vars.lamp = parsed.lamp;
+                if (parsed.emergencyStop !== undefined) vars.pardEmergencia = parsed.emergencyStop;
+                if (parsed.processPaused !== undefined) vars.pauseCycle = parsed.processPaused;
+                if (parsed.fan !== undefined) vars.fan = parsed.fan;
+                if (parsed.cycleCurrent !== undefined) vars.cycleCount = parsed.cycleCurrent;
+                if (parsed.cycleTotal !== undefined && parsed.cycleCurrent !== undefined) {
+                    // La tarjeta "cycles" es "Ciclos Restantes"
+                    vars.cycles = Math.max(0, parsed.cycleTotal - parsed.cycleCurrent);
+                }
+                if (parsed.limitMaxY !== undefined) vars.finCarreraY = parsed.limitMaxY;
+                if (parsed.homeZ !== undefined) vars.inicioCarreraZ = parsed.homeZ;
+                if (parsed.limitMaxZ !== undefined) vars.finCarreraZ = parsed.limitMaxZ;
+                vars.timeStamp = Date.now();
+                break;
+
+            case 'position':
+                if (parsed.axis === 'Y') vars.travelY = parsed.position;
+                vars.timeStamp = Date.now();
+                break;
+
+            case 'sensors':
+                // envTemp / envHumidity ya vienen con el nombre correcto
+                if (parsed.envTemp !== undefined) vars.envTemp = parsed.envTemp;
+                if (parsed.envHumidity !== undefined) vars.envHumidity = parsed.envHumidity;
+                break;
+
+            case 'emergency':
+                vars.pardEmergencia = parsed.active;
+                break;
+
+            case 'limit':
+                if (parsed.axis === 'Y' && parsed.limit === 'MAX') vars.finCarreraY = true;
+                if (parsed.axis === 'Z' && parsed.limit === 'MAX') vars.finCarreraZ = true;
+                if (parsed.axis === 'Z' && parsed.limit === 'MIN') vars.inicioCarreraZ = true;
+                break;
+
+            case 'config':
+                // Constantes de la máquina que el firmware envía al arrancar
+                if (parsed.setY1 !== undefined) vars.setY1 = parsed.setY1;
+                if (parsed.setY2 !== undefined) vars.setY2 = parsed.setY2;
+                if (parsed.setY3 !== undefined) vars.setY3 = parsed.setY3;
+                if (parsed.setY4 !== undefined) vars.setY4 = parsed.setY4;
+                if (parsed.setHomeY !== undefined) vars.setHomeY = parsed.setHomeY;
+                break;
+        }
+
+        return vars;
     }
 
     updateProcessData(data) {

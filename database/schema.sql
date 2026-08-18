@@ -42,6 +42,7 @@ CREATE TABLE IF NOT EXISTS recipes (
     deleted_at TIMESTAMP NULL,
     created_by_user_id INT DEFAULT 1,
     is_active BOOLEAN DEFAULT true,
+    is_staged BOOLEAN DEFAULT false COMMENT 'true = receta por etapas: su secuencia vive en recipe_stages',
     
     INDEX idx_name (name),
     INDEX idx_type (type),
@@ -80,8 +81,17 @@ CREATE TABLE IF NOT EXISTS recipe_parameters (
     -- Posiciones (opcional)
     dip_start_position DECIMAL(8,2) DEFAULT 0.0 COMMENT 'Posición inicial Z con sustrato',
     dipping_length DECIMAL(8,2) DEFAULT 0.0 COMMENT 'Longitud de inmersión de sustrato',
-    transfer_speed DECIMAL(8,2) DEFAULT 0.0 COMMENT 'Velocidad Y cambio de solución',
-    dip_speed DECIMAL(8,2) DEFAULT 0.0 COMMENT 'Velocidad Z inmersión sustrato a solución',
+    transfer_speed DECIMAL(8,2) DEFAULT 0.0 COMMENT 'Velocidad Y cambio de solución, en mm/s',
+    dip_speed DECIMAL(8,2) DEFAULT 0.0 COMMENT 'Velocidad Z inmersión y emersión del sustrato, en mm/s',
+    -- Posición de cada vaso desde el home del eje Y. Es el ajuste por receta que
+    -- se pone encima de la geometría calibrada de la máquina (CAL_Y_*, en la
+    -- EEPROM del Arduino), para un montaje puntual. Van uno a uno porque los
+    -- vasos no tienen por qué estar igualmente espaciados. 0 = usar la geometría
+    -- de la máquina, que es el caso normal.
+    pos_y1 DECIMAL(8,2) DEFAULT 0.0 COMMENT 'Posición del vaso 1 desde el home de Y, en mm (0 = geometría de la máquina)',
+    pos_y2 DECIMAL(8,2) DEFAULT 0.0 COMMENT 'Posición del vaso 2 desde el home de Y, en mm (0 = geometría de la máquina)',
+    pos_y3 DECIMAL(8,2) DEFAULT 0.0 COMMENT 'Posición del vaso 3 desde el home de Y, en mm (0 = geometría de la máquina)',
+    pos_y4 DECIMAL(8,2) DEFAULT 0.0 COMMENT 'Posición del vaso 4 desde el home de Y, en mm (0 = geometría de la máquina)',
     -- Variables Pendiente (COMENTADAS - No implementadas aún)
     -- set_temp1 DECIMAL(5,2) DEFAULT 0.0 COMMENT '*Pendiente* Configura la temperatura deseada en la parrilla 1',
     -- set_temp2 DECIMAL(5,2) DEFAULT 0.0 COMMENT '*Pendiente* Configura la temperatura deseada en la parrilla 2',
@@ -101,6 +111,64 @@ CREATE TABLE IF NOT EXISTS recipe_parameters (
     FOREIGN KEY (recipe_id) REFERENCES recipes(id) ON DELETE CASCADE,
     INDEX idx_recipe_id (recipe_id),
     UNIQUE KEY unique_recipe_params (recipe_id)
+);
+
+-- =====================================================
+-- Tabla de Etapas de Recetas (recetas por etapas)
+-- =====================================================
+-- Una receta por etapas (recipes.is_staged = true) es una sola corrida
+-- compuesta por varios tramos encadenados: 5 ciclos de una manera, luego 6 de
+-- otra, luego 15 de otra. Cada fila de esta tabla es un tramo y lleva el juego
+-- completo de parámetros de una receta normal, porque el operador tiene que
+-- poder cambiar cualquier cosa entre un tramo y el siguiente.
+--
+-- Las recetas normales no usan esta tabla: siguen viviendo en
+-- recipe_parameters, que no se toca. Una receta por etapas SÍ mantiene además
+-- su fila en recipe_parameters, pero como resumen calculado (duración total,
+-- ciclos totales) para que las pantallas y vistas que ya existen sigan
+-- mostrando algo sensato sin saber de etapas.
+-- =====================================================
+CREATE TABLE IF NOT EXISTS recipe_stages (
+    id INT PRIMARY KEY AUTO_INCREMENT,
+    recipe_id INT NOT NULL,
+    stage_order INT NOT NULL COMMENT 'Orden de ejecución de la etapa, empezando en 1',
+    name VARCHAR(100) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci COMMENT 'Nombre opcional de la etapa',
+    duration INT DEFAULT 0 COMMENT 'Duración estimada de la etapa en minutos (calculada)',
+    temperature DECIMAL(5,2) DEFAULT 0.0 COMMENT 'Temperatura en °C',
+    velocity_x DECIMAL(8,2) DEFAULT 0.0 COMMENT 'Velocidad Motor X en rpm',
+    velocity_y DECIMAL(8,2) DEFAULT 0.0 COMMENT 'Velocidad Motor Y en rpm',
+    accel_x DECIMAL(8,2) DEFAULT 0.0 COMMENT 'Aceleración Motor X en rpm/s',
+    accel_y DECIMAL(8,2) DEFAULT 0.0 COMMENT 'Aceleración Motor Y en rpm/s',
+    humidity_offset DECIMAL(5,2) DEFAULT 0.0 COMMENT 'Offset de humedad en %',
+    temperature_offset DECIMAL(5,2) DEFAULT 0.0 COMMENT 'Offset de temperatura en °C',
+    -- Tiempos de inmersión (en milisegundos)
+    dipping_wait0 INT DEFAULT 0 COMMENT 'Tiempo de inmersión 1 (ms)',
+    dipping_wait1 INT DEFAULT 0 COMMENT 'Tiempo de inmersión 2 (ms)',
+    dipping_wait2 INT DEFAULT 0 COMMENT 'Tiempo de inmersión 3 (ms)',
+    dipping_wait3 INT DEFAULT 0 COMMENT 'Tiempo de inmersión 4 (ms)',
+    transfer_wait INT DEFAULT 0 COMMENT 'Tiempo de espera para cambio de posición en Y (ms)',
+    -- Parámetros de proceso
+    cycles INT DEFAULT 1 COMMENT 'Cantidad de ciclos de esta etapa',
+    fan BOOLEAN DEFAULT false COMMENT 'Ventilador encendido/apagado',
+    except_dripping1 BOOLEAN DEFAULT false COMMENT 'Excluir inmersión en Y1',
+    except_dripping2 BOOLEAN DEFAULT false COMMENT 'Excluir inmersión en Y2',
+    except_dripping3 BOOLEAN DEFAULT false COMMENT 'Excluir inmersión en Y3',
+    except_dripping4 BOOLEAN DEFAULT false COMMENT 'Excluir inmersión en Y4',
+    -- Posiciones (opcional)
+    dip_start_position DECIMAL(8,2) DEFAULT 0.0 COMMENT 'Posición inicial Z con sustrato',
+    dipping_length DECIMAL(8,2) DEFAULT 0.0 COMMENT 'Longitud de inmersión de sustrato',
+    transfer_speed DECIMAL(8,2) DEFAULT 0.0 COMMENT 'Velocidad Y cambio de solución, en mm/s',
+    dip_speed DECIMAL(8,2) DEFAULT 0.0 COMMENT 'Velocidad Z inmersión y emersión del sustrato, en mm/s',
+    pos_y1 DECIMAL(8,2) DEFAULT 0.0 COMMENT 'Posición del vaso 1 desde el home de Y, en mm (0 = geometría de la máquina)',
+    pos_y2 DECIMAL(8,2) DEFAULT 0.0 COMMENT 'Posición del vaso 2 desde el home de Y, en mm (0 = geometría de la máquina)',
+    pos_y3 DECIMAL(8,2) DEFAULT 0.0 COMMENT 'Posición del vaso 3 desde el home de Y, en mm (0 = geometría de la máquina)',
+    pos_y4 DECIMAL(8,2) DEFAULT 0.0 COMMENT 'Posición del vaso 4 desde el home de Y, en mm (0 = geometría de la máquina)',
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+
+    FOREIGN KEY (recipe_id) REFERENCES recipes(id) ON DELETE CASCADE,
+    INDEX idx_stage_recipe_id (recipe_id),
+    UNIQUE KEY unique_recipe_stage_order (recipe_id, stage_order)
 );
 
 -- =====================================================
@@ -339,6 +407,8 @@ SELECT
     r.updated_at,
     r.created_by_user_id,
     r.is_active,
+    r.is_staged,
+    (SELECT COUNT(*) FROM recipe_stages s WHERE s.recipe_id = r.id) as stage_count,
     u.full_name as created_by_name,
     u.role as creator_role,
     rp.duration,

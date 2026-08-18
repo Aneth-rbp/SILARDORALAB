@@ -6,6 +6,7 @@
 const { app, BrowserWindow, Menu, ipcMain, dialog } = require('electron');
 const path = require('path');
 const { spawn } = require('child_process');
+const { initUpdater, checkForUpdates } = require('./updater');
 const isDev = process.argv.includes('--dev');
 
 // Habilitar soporte para teclado virtual en pantallas táctiles de Windows
@@ -13,6 +14,10 @@ app.commandLine.appendSwitch('enable-virtual-keyboard');
 
 // Variable para el proceso del servidor
 let serverProcess = null;
+
+// Distingue un cierre intencional del servidor (salida o actualización) de una
+// caída, para que el watchdog de 'close' no lo vuelva a levantar
+let shuttingDownServer = false;
 
 // Mantener una referencia global del objeto de ventana
 let mainWindow;
@@ -191,6 +196,8 @@ function startServer() {
     serverCwd = appPath;
   }
 
+  shuttingDownServer = false;
+
   console.log(`Iniciando servidor desde: ${serverPath}`);
   console.log(`Directorio de trabajo: ${serverCwd}`);
 
@@ -228,7 +235,7 @@ function startServer() {
   serverProcess.on('close', (code) => {
     console.log('Servidor cerrado con código:', code);
     // Intentar reiniciar si se cierra inesperadamente (solo en producción, máx 3 reintentos)
-    if (code !== 0 && !isDev) {
+    if (code !== 0 && !isDev && !shuttingDownServer) {
       if (typeof global.serverStartAttempts === 'undefined') {
         global.serverStartAttempts = 0;
       }
@@ -242,6 +249,46 @@ function startServer() {
         console.error('Se excedió el número máximo de reintentos para iniciar el servidor de fondo.');
       }
     }
+  });
+}
+
+/**
+ * Cierra el proceso hijo del servidor y espera a que termine.
+ * Necesario antes de instalar una actualización: mientras siga vivo mantiene
+ * tomados el puerto serial y el binario nativo de serialport, y el instalador
+ * NSIS no puede reemplazar esos archivos.
+ */
+function stopServer() {
+  return new Promise((resolve) => {
+    if (!serverProcess) {
+      resolve();
+      return;
+    }
+
+    shuttingDownServer = true;
+
+    const child = serverProcess;
+    serverProcess = null;
+
+    let finished = false;
+    const finish = () => {
+      if (finished) return;
+      finished = true;
+      resolve();
+    };
+
+    child.once('close', finish);
+    child.kill();
+
+    // Si no cerró por las buenas, forzarlo para no bloquear la instalación
+    setTimeout(() => {
+      try {
+        child.kill('SIGKILL');
+      } catch (error) {
+        console.error('No se pudo forzar el cierre del servidor:', error.message);
+      }
+      finish();
+    }, 5000);
   });
 }
 
@@ -309,6 +356,12 @@ function createMenu() {
         },
         { type: 'separator' },
         {
+          label: 'Buscar Actualizaciones',
+          click: () => {
+            checkForUpdates(true);
+          }
+        },
+        {
           label: 'Acerca de SILAR System',
           click: () => {
             dialog.showMessageBox(mainWindow, {
@@ -332,6 +385,12 @@ app.whenReady().then(() => {
   createWindow();
   createMenu();
 
+  initUpdater({
+    serverUrl,
+    getWindow: () => mainWindow,
+    stopServer
+  });
+
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) {
       createWindow();
@@ -348,6 +407,7 @@ app.on('window-all-closed', () => {
 // Cerrar el servidor cuando se cierre la aplicación
 app.on('before-quit', () => {
   if (serverProcess) {
+    shuttingDownServer = true;
     serverProcess.kill();
   }
 });

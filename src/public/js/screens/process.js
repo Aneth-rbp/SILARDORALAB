@@ -7,6 +7,7 @@ class ProcessScreen {
     constructor(app) {
         this.app = app;
         this.currentProcess = null;
+        this.handleStageChanged = this.handleStageChanged.bind(this);
         this.timer = null;
         this.currentStatus = 'stopped'; // Almacenar el estado actual
         this.startTime = null; // Inicializar startTime
@@ -18,12 +19,41 @@ class ProcessScreen {
         console.log('ProcessScreen destroyed');
         this.forceStopTimer();
         this.stopStatusPolling();
+        document.removeEventListener('process-stage-changed', this.handleStageChanged);
     }
 
     init() {
         this.bindEvents();
         this.loadProcessStatus();
         this.startStatusPolling();
+
+        document.addEventListener('process-stage-changed', this.handleStageChanged);
+        // Si ya había una corrida por etapas en marcha antes de abrir esta
+        // pantalla, el evento ya pasó: se toma la etapa que guardó la app.
+        this.updateStageBadge(this.app.processData?.currentStage || null);
+    }
+
+    handleStageChanged(evento) {
+        this.updateStageBadge(evento.detail);
+    }
+
+    /**
+     * "Etapa 2/3" junto al estado. En una receta normal no hay etapas y el
+     * distintivo no se muestra.
+     */
+    updateStageBadge(etapa) {
+        const distintivo = document.getElementById('process-stage');
+        if (!distintivo) return;
+
+        if (!etapa) {
+            distintivo.classList.add('d-none');
+            distintivo.textContent = '';
+            return;
+        }
+
+        const ciclos = etapa.cycles ? ` · ${etapa.cycles} ciclos` : '';
+        distintivo.textContent = `Etapa ${etapa.stage}/${etapa.totalStages}${ciclos}`;
+        distintivo.classList.remove('d-none');
     }
 
     startStatusPolling() {
@@ -485,6 +515,7 @@ class ProcessScreen {
                                 <p class="text-muted small mb-2">Gestión de ejecución del sistema</p>
                                 <div class="d-flex flex-column align-items-center gap-2">
                                     <span class="badge bg-secondary fs-5 py-2 px-3" id="process-status">Detenido</span>
+                                    <span class="badge bg-info fs-6 py-2 px-3 d-none" id="process-stage"></span>
                                     <div id="process-timer" style="visibility: hidden;">
                                         <span class="badge bg-dark fs-3 py-2 px-4" id="timer-display">00:00:00</span>
                                     </div>

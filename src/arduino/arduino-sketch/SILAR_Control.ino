@@ -1,5 +1,6 @@
 #include <AccelStepper.h>
 #include <ezButton.h>
+#include <EEPROM.h>
 
 /*
  * Sistema de Control SILAR - Motores Stepper   
@@ -52,6 +53,10 @@ bool emergencyStop = false;
 long posY = 0;
 long posZ = 0;
 
+// Envío periódico de estado a la aplicación
+const unsigned long STATUS_INTERVAL_MS = 500;
+unsigned long ultimoStatusMs = 0;
+
 // Convención del driver: ENA activo-LOW
 // LOW  = motor habilitado (driver activado)
 // HIGH = motor deshabilitado (driver desactivado)
@@ -67,6 +72,207 @@ const float MAX_SPEED_Z = 2000.0f;
 const float MAX_ACCEL_Z = 1500.0f;
 const unsigned int MIN_PULSE_WIDTH_US = 800; // Duración mínima de pulso STEP (µs) según documentación eléctrica
 const unsigned long HOME_TIMEOUT_MS = 20000UL; // Tiempo máximo para encontrar cada home
+
+// --- Calibración del eje Z (medida 2026-08-17) ---
+// Método: un solo home y tres movimientos iguales de 1000 pasos, midiendo la
+// altura del sustrato sobre el suelo después de cada uno. Las DIFERENCIAS entre
+// lecturas dan el recorrido sin depender de dónde esté el cero.
+//
+//   home -> 275 mm | Z-1000 -> 225 | Z-1000 -> 175 | Z-1000 -> 125
+//
+// 50 mm por cada 1000 pasos -> 0.05 mm/paso -> 20 pasos/mm (200 pasos = 10 mm).
+// Los tres tramos salen idénticos, así que el eje no pierde pasos.
+//
+// Para recalibrar tras tocar la mecánica, repetir exactamente esa secuencia.
+//
+// Estos tres valores YA NO son constantes: son los valores de fábrica y a la vez
+// el arranque en frío. La pantalla de Configuración (solo administrador) los
+// reescribe con CAL_Z_* y los guarda en EEPROM, así que recalibrar ya no obliga
+// a recompilar. Ver cargarCalibracionZ() / guardarCalibracionZ() más abajo.
+const float PASOS_POR_MM_Z_FABRICA = 20.0f;
+const float ALTURA_HOME_MM_FABRICA = 275.0f;
+const float ALTURA_MINIMA_MM_FABRICA = 25.0f;
+
+float PASOS_POR_MM_Z = PASOS_POR_MM_Z_FABRICA;
+// Altura del sustrato sobre el suelo cuando Z está en home (posZ = 0).
+// No se mide con la regla directamente: se DEDUCE de la secuencia de arriba,
+// extrapolando el primer tramo hacia atrás (225 + 50 = 275). Medirla a ojo en
+// home dio 255 y resultó estar 2 cm baja, lo que descuadraba toda la escala.
+float ALTURA_HOME_MM = ALTURA_HOME_MM_FABRICA;
+// Altura mínima sobre el suelo a la que se permite llegar. Es el fondo real
+// del eje: ninguna altura ni inmersión puede pasar de aquí.
+float ALTURA_MINIMA_MM = ALTURA_MINIMA_MM_FABRICA;
+// Fondo del eje expresado en pasos, derivado de la calibración de arriba.
+// Se recalcula con recalcularLimitesZ() cada vez que cambia la calibración.
+long LIMITE_SOFTWARE_Z_ABAJO =
+    -(long)((ALTURA_HOME_MM_FABRICA - ALTURA_MINIMA_MM_FABRICA) * PASOS_POR_MM_Z_FABRICA + 0.5f);
+// Techo de la receta en pasos: Z nunca sube por encima de este valor mientras
+// el proceso automático está activo. 0 = sin techo (comportamiento original).
+long techoZReceta = 0;
+
+// Velocidad del viaje inicial hasta dipStartPosition, en microsegundos entre
+// flancos: es la unidad interna de moverEjeZVelocidad, no la de la receta, que
+// habla en mm/s. Ese tramo es un reposicionamiento en seco, con el sustrato
+// fuera de toda solución, así que no tiene por qué ir a la velocidad de emersión
+// de la receta: con una emersión lenta (3 mm/s) bajar de home a 70 mm tardaba
+// más de un minuto antes de empezar el primer ciclo.
+// 250 us = 2000 pasos/s = MAX_SPEED_Z, el mismo tope que usa el jog manual.
+const long MICROS_POSICIONAMIENTO_Z = 250;
+
+// --- Persistencia de la calibración en EEPROM ---
+// La firma evita leer basura en una placa virgen o tras cambiar el formato:
+// si no coincide, se usan los valores de fábrica de arriba.
+const uint32_t CAL_Z_FIRMA = 0x5A43414CUL;  // "ZCAL"
+const int CAL_Z_EEPROM_ADDR = 0;
+
+struct CalibracionZ {
+  uint32_t firma;
+  float pasosPorMM;
+  float alturaHomeMM;
+  float alturaMinimaMM;
+};
+
+void recalcularLimitesZ() {
+  LIMITE_SOFTWARE_Z_ABAJO =
+      -(long)((ALTURA_HOME_MM - ALTURA_MINIMA_MM) * PASOS_POR_MM_Z + 0.5f);
+}
+
+// Rangos de cordura. No pretenden ser exactos, solo impedir que un dedazo en la
+// pantalla deje la máquina con una escala absurda que se lleve el eje al suelo.
+bool calibracionZValida(float ppm, float home, float minima) {
+  if (isnan(ppm) || isnan(home) || isnan(minima)) return false;
+  if (ppm < 1.0f || ppm > 400.0f) return false;
+  if (home < 50.0f || home > 1000.0f) return false;
+  if (minima < 0.0f || minima >= home) return false;
+  return true;
+}
+
+void cargarCalibracionZ() {
+  CalibracionZ cal;
+  EEPROM.get(CAL_Z_EEPROM_ADDR, cal);
+
+  if (cal.firma == CAL_Z_FIRMA &&
+      calibracionZValida(cal.pasosPorMM, cal.alturaHomeMM, cal.alturaMinimaMM)) {
+    PASOS_POR_MM_Z = cal.pasosPorMM;
+    ALTURA_HOME_MM = cal.alturaHomeMM;
+    ALTURA_MINIMA_MM = cal.alturaMinimaMM;
+  }
+
+  recalcularLimitesZ();
+}
+
+void guardarCalibracionZ() {
+  CalibracionZ cal;
+  cal.firma = CAL_Z_FIRMA;
+  cal.pasosPorMM = PASOS_POR_MM_Z;
+  cal.alturaHomeMM = ALTURA_HOME_MM;
+  cal.alturaMinimaMM = ALTURA_MINIMA_MM;
+  // put() escribe byte a byte con update(), así que solo toca los que cambian:
+  // la EEPROM aguanta ~100k escrituras por celda y esto cuelga de un botón.
+  EEPROM.put(CAL_Z_EEPROM_ADDR, cal);
+}
+
+// Formato fijo para que la app lo parsee sin ambigüedad.
+void enviarCalibracionZ() {
+  Serial.print("CAL_Z:ppm=");
+  Serial.print(PASOS_POR_MM_Z, 4);
+  Serial.print(",home=");
+  Serial.print(ALTURA_HOME_MM, 2);
+  Serial.print(",min=");
+  Serial.print(ALTURA_MINIMA_MM, 2);
+  Serial.print(",fondo=");
+  Serial.print(LIMITE_SOFTWARE_Z_ABAJO);
+  Serial.print(",z=");
+  Serial.println(posZ);
+}
+
+// Lee un campo "clave=valor" de una lista separada por comas.
+// Devuelve NAN si la clave no aparece, para poder aplicar solo lo que se envía.
+float leerCampoCalibracion(const String &texto, const char *clave) {
+  String prefijo = String(clave) + "=";
+  int idx = texto.indexOf(prefijo);
+  if (idx < 0) return NAN;
+  int inicio = idx + prefijo.length();
+  int fin = texto.indexOf(',', inicio);
+  if (fin < 0) fin = texto.length();
+  return texto.substring(inicio, fin).toFloat();
+}
+
+// CAL_Z_SET:ppm=20.0,home=275.0,min=25.0  (los tres campos son opcionales)
+// Solo aplica en RAM: hay que mandar CAL_Z_SAVE para que sobreviva al reinicio.
+// Se valida el conjunto COMPLETO antes de tocar nada, para no dejar la máquina
+// con una calibración a medias si uno de los tres valores es absurdo.
+void procesarCalibracionZ(String args) {
+  args.trim();
+
+  float ppm = leerCampoCalibracion(args, "ppm");
+  float home = leerCampoCalibracion(args, "home");
+  float minima = leerCampoCalibracion(args, "min");
+
+  if (isnan(ppm)) ppm = PASOS_POR_MM_Z;
+  if (isnan(home)) home = ALTURA_HOME_MM;
+  if (isnan(minima)) minima = ALTURA_MINIMA_MM;
+
+  if (!calibracionZValida(ppm, home, minima)) {
+    Serial.println("CAL_Z_ERROR: Valores fuera de rango");
+    return;
+  }
+
+  PASOS_POR_MM_Z = ppm;
+  ALTURA_HOME_MM = home;
+  ALTURA_MINIMA_MM = minima;
+  recalcularLimitesZ();
+
+  // La posición actual no se toca: posZ = 0 sigue siendo el home físico. Lo que
+  // cambia es a cuántos mm sobre el suelo equivale, y eso se recalcula solo.
+  Serial.println("CAL_Z_APLICADA");
+  enviarCalibracionZ();
+}
+
+// Lleva Z a una altura absoluta sobre el suelo usando el jog manual, que es el
+// mismo camino que usa la calibración. Así lo que se verifica es exactamente lo
+// que luego se mide.
+void moverEjeZaAltura(float alturaMM) {
+  long objetivo = alturaMMaPasosZ(alturaMM);
+  long delta = objetivo - posZ;
+
+  Serial.print("GOTO_MM: ");
+  Serial.print(alturaMM, 1);
+  Serial.print(" mm -> Z=");
+  Serial.print(objetivo);
+  Serial.print(" (delta ");
+  Serial.print(delta);
+  Serial.println(" pasos)");
+
+  if (delta != 0) {
+    moverEjeZ(delta);
+  }
+
+  Serial.print("GOTO_MM_ALCANZADO: Z=");
+  Serial.print(posZ);
+  Serial.print(" -> ");
+  Serial.print(pasosZaAlturaMM(posZ), 1);
+  Serial.println(" mm");
+}
+
+// Convierte una altura sobre el suelo (mm) a coordenada Z en pasos.
+// El origen de pasos es el home, que está arriba: posZ = 0 equivale a
+// ALTURA_HOME_MM sobre el suelo, y bajar da valores negativos.
+long alturaMMaPasosZ(float alturaMM) {
+  if (alturaMM < ALTURA_MINIMA_MM) alturaMM = ALTURA_MINIMA_MM;
+  if (alturaMM > ALTURA_HOME_MM) alturaMM = ALTURA_HOME_MM;
+  return -(long)((ALTURA_HOME_MM - alturaMM) * PASOS_POR_MM_Z + 0.5f);
+}
+
+// Convierte una distancia relativa en mm a pasos del eje Z.
+long mmAPasosZ(float mm) {
+  return (long)(mm * PASOS_POR_MM_Z + (mm >= 0 ? 0.5f : -0.5f));
+}
+
+// Convierte una coordenada Z en pasos a su altura sobre el suelo, en mm.
+float pasosZaAlturaMM(long pasos) {
+  return ALTURA_HOME_MM + (pasos / PASOS_POR_MM_Z);
+}
 
 // Botones con rebote (finales de carrera y paro)
 ezButton homeSwitchY(homePinY);
@@ -95,23 +301,251 @@ struct RecipeParams {
   bool exceptDripping2;
   bool exceptDripping3;
   bool exceptDripping4;
-  long dipStartPosition;  // Posición Z inicial
-  long dippingLength;      // Longitud de inmersión en pasos
-  long transferSpeed;      // Velocidad de transferencia (pasos/segundo)
-  long dipSpeed;           // Velocidad de inmersión (pasos/segundo)
+  float dipStartPosition;  // Altura máxima de Z sobre el SUELO durante la receta, en mm (0 = no usar)
+  float dippingLength;     // Profundidad de cada inmersión, en mm
+  // Las dos velocidades van en mm/s, la misma unidad que el operador escribe en
+  // la receta y que aparece en la hoja de parámetros. La traducción a la unidad
+  // de los motores (microsegundos entre flancos) ocurre en un solo sitio:
+  // velocidadMMsAMicros(). El nombre lleva la unidad a propósito: cuando estos
+  // campos se llamaban transferSpeed/dipSpeed a secas, cada capa del sistema
+  // supuso una unidad distinta y las recetas corrían a la velocidad equivocada.
+  float transferSpeedMMs;  // Velocidad de transferencia del eje Y, en mm/s
+  float dipSpeedMMs;       // Velocidad de inmersión y emersión del eje Z, en mm/s
+  // Posición de cada vaso medida desde el home de Y, en mm. Es un ajuste POR
+  // RECETA, encima de la geometría de la máquina: sirve para un montaje en el
+  // que los vasos no están igualmente separados, sin tener que recalibrar el
+  // banco entero. 0 = usar POS_VASO_MM, la geometría calibrada de la máquina.
+  // Como el vaso 1 vive en el home (0 mm) de todas formas, ese 0 no es ambiguo:
+  // sale la misma posición por los dos caminos.
+  float posVasoMM[4];
   bool fan;
 } recipeParams;
 
-// Posiciones Y para cada solución (en pasos desde home)
-// Distribuidos uniformemente de 0 a 12600 (límite máximo físico detectado a 14027 pasos)
-const long POS_Y1 = 0;      // Posición Y para solución 1 (Vaso 1)
-const long POS_Y2 = 4200;   // Posición Y para solución 2 (Vaso 2)
-const long POS_Y3 = 8400;   // Posición Y para solución 3 (Vaso 3)
-const long POS_Y4 = 12600;  // Posición Y para solución 4 (Vaso 4)
+// --- Recetas por etapas ---
+//
+// Una receta por etapas es una sola corrida partida en tramos: 5 ciclos de una
+// manera, luego 6 de otra, luego 15 de otra, sin que el operador tenga que
+// cambiar de receta a mitad del proceso.
+//
+// La secuencia vive aqui y no en el PC a proposito. El Arduino ya corre una
+// receta entera por su cuenta; si el PC encadenara etapa por etapa, entre una y
+// otra habria un home completo, la lampara parpadearia, y un cuelgue del PC o
+// un tropiezo del puerto serie dejaria la corrida abandonada a medias. Con la
+// lista aqui dentro, PAUSE / RESUME / STOP y el paro de emergencia siguen
+// funcionando exactamente igual que con una receta normal.
+//
+// recipeParams sigue siendo "los parametros en vigor": al entrar en una etapa
+// se le copia encima la etapa correspondiente, y todo lo que ya leia de ahi
+// (ejecutarInmersion, posicionVasoPasos, los limites) sigue igual sin tocarse.
+//
+// MAX_ETAPAS son ~56 bytes por etapa contra los 8 KB de SRAM del Mega: 8 etapas
+// son menos de medio kilobyte. El limite no es la memoria sino lo que un
+// operador puede llenar en un formulario sin equivocarse.
+#define MAX_ETAPAS 8
+RecipeParams etapas[MAX_ETAPAS];
+int totalEtapas = 0;
+int etapaActual = 0;
+bool ventiladorActivo = false;
+
+// --- Geometría del eje Y ---
+//
+// Dos cosas independientes que hasta ahora salían de un único par de números
+// clavados (4200 pasos <-> 55 mm), y que se tocan por motivos distintos:
+//
+//   - PASOS_POR_MM_Y es la mecánica de la transmisión (correa, polea,
+//     microstepping). Solo cambia si se toca el hardware del eje. De ella
+//     depende la traducción de transferSpeed (mm/s) a pasos/s.
+//   - POS_VASO_MM son las cuatro posiciones del banco, cada una medida desde el
+//     home de Y. Se guardan una por una y no como una separación uniforme,
+//     porque los vasos no tienen por qué estar igualmente espaciados: en cuanto
+//     uno se reubica, la separación deja de describir el montaje.
+//
+// Las dos se editan desde Configuración con CAL_Y_* y se guardan en EEPROM,
+// igual que la calibración de Z, así que reubicar los vasos ya no obliga a
+// recompilar. Los valores de fábrica reproducen exactamente las posiciones que
+// el sketch traía clavadas: 0/55/110/165 mm x 76.3636 pasos/mm = 0/4200/8400/12600.
+const float PASOS_POR_MM_Y_FABRICA = 4200.0f / 55.0f;  // 76.3636 pasos/mm
+const float POS_VASO_MM_FABRICA[4] = { 0.0f, 55.0f, 110.0f, 165.0f };
+
+float PASOS_POR_MM_Y = PASOS_POR_MM_Y_FABRICA;
+float POS_VASO_MM[4] = { 0.0f, 55.0f, 110.0f, 165.0f };
+
+// Final de carrera máximo del eje, en pasos desde home. Ninguna posición de vaso
+// puede pasar de aquí: con la escala de fábrica son 14027/76.36 = 183.7 mm.
+const long LIMITE_FISICO_Y_PASOS = 14027;
+
+// Posiciones Y de cada solución, en pasos desde home. Ya no son constantes: las
+// recalcula recalcularPosicionesY() cada vez que cambia la geometría de arriba.
+long POS_Y1 = 0;      // Posición Y para solución 1 (Vaso 1)
+long POS_Y2 = 4200;   // Posición Y para solución 2 (Vaso 2)
+long POS_Y3 = 8400;   // Posición Y para solución 3 (Vaso 3)
+long POS_Y4 = 12600;  // Posición Y para solución 4 (Vaso 4)
+
+long posicionVasoAPasos(float mm) {
+  return (long)(mm * PASOS_POR_MM_Y + 0.5f);
+}
+
+void recalcularPosicionesY() {
+  POS_Y1 = posicionVasoAPasos(POS_VASO_MM[0]);
+  POS_Y2 = posicionVasoAPasos(POS_VASO_MM[1]);
+  POS_Y3 = posicionVasoAPasos(POS_VASO_MM[2]);
+  POS_Y4 = posicionVasoAPasos(POS_VASO_MM[3]);
+}
+
+// Posición del vaso (0..3) que toca usar en la receta en curso, en pasos.
+// La receta puede traer las suyas para un montaje puntual; si no las trae, mandan
+// las de la máquina. No avisa ni recorta nada: eso se hace una sola vez al
+// recibir la receta (ver parsearParametrosReceta), porque desde aquí el mensaje
+// saldría en cada inmersión de cada ciclo.
+long posicionVasoPasos(int indice) {
+  float mm = recipeParams.posVasoMM[indice];
+  if (mm <= 0.0f) {
+    const long deLaMaquina[4] = { POS_Y1, POS_Y2, POS_Y3, POS_Y4 };
+    return deLaMaquina[indice];
+  }
+  return posicionVasoAPasos(mm);
+}
+
+// Único punto de traducción entre la unidad del operador (mm/s) y la de los
+// motores (microsegundos entre flancos). Dos flancos por paso, de ahí el factor
+// 2: es la misma convención que deshace moverEjeZVelocidad al calcular pasos/s.
+// Devuelve 0 si la velocidad no es utilizable, para que el llamador aplique su
+// propio valor por defecto en vez de mover el eje a una velocidad inventada.
+long velocidadMMsAMicros(float mmPorSegundo, float pasosPorMM) {
+  if (mmPorSegundo <= 0.0f || pasosPorMM <= 0.0f) return 0;
+  float pasosPorSegundo = mmPorSegundo * pasosPorMM;
+  if (pasosPorSegundo < 1.0f) pasosPorSegundo = 1.0f;
+  return (long)(1000000.0f / (2.0f * pasosPorSegundo) + 0.5f);
+}
+
+// --- Persistencia de la geometría de Y en EEPROM ---
+// Mismo esquema que CalibracionZ: firma propia para no leer basura en una placa
+// virgen, y una dirección distinta para no pisar el bloque de Z (16 bytes en 0).
+const uint32_t CAL_Y_FIRMA = 0x59434132UL;  // "YCA2"
+const int CAL_Y_EEPROM_ADDR = 32;
+
+struct CalibracionY {
+  uint32_t firma;
+  float pasosPorMM;
+  float posVasoMM[4];
+};
+
+// Rangos de cordura, con el mismo criterio que calibracionZValida: no pretenden
+// ser exactos, solo impedir que un dedazo en la pantalla deje la máquina
+// mandando el eje contra el final de carrera.
+bool calibracionYValida(float ppm, const float posiciones[4]) {
+  if (isnan(ppm)) return false;
+  if (ppm < 1.0f || ppm > 400.0f) return false;
+
+  for (int i = 0; i < 4; i++) {
+    if (isnan(posiciones[i])) return false;
+    if (posiciones[i] < 0.0f) return false;
+    // Cada vaso tiene que caber en el eje. Sin esta comprobación, una posición
+    // demasiado grande no da error: la receta se va contra el final de carrera
+    // en esa transferencia y la inmersión se hace en el sitio equivocado.
+    if (posiciones[i] * ppm > (float)LIMITE_FISICO_Y_PASOS) return false;
+  }
+  return true;
+}
+
+void cargarCalibracionY() {
+  CalibracionY cal;
+  EEPROM.get(CAL_Y_EEPROM_ADDR, cal);
+
+  if (cal.firma == CAL_Y_FIRMA && calibracionYValida(cal.pasosPorMM, cal.posVasoMM)) {
+    PASOS_POR_MM_Y = cal.pasosPorMM;
+    for (int i = 0; i < 4; i++) POS_VASO_MM[i] = cal.posVasoMM[i];
+  }
+
+  recalcularPosicionesY();
+}
+
+void guardarCalibracionY() {
+  CalibracionY cal;
+  cal.firma = CAL_Y_FIRMA;
+  cal.pasosPorMM = PASOS_POR_MM_Y;
+  for (int i = 0; i < 4; i++) cal.posVasoMM[i] = POS_VASO_MM[i];
+  EEPROM.put(CAL_Y_EEPROM_ADDR, cal);
+}
+
+// Formato fijo para que la app lo parsee sin ambigüedad. Incluye las cuatro
+// posiciones ya calculadas y la velocidad máxima que permite la escala actual,
+// que es justo el dato que hacía falta para saber por qué una receta a 39 mm/s
+// se recorta: ese tope depende de PASOS_POR_MM_Y.
+void enviarCalibracionY() {
+  Serial.print("CAL_Y:ppm=");
+  Serial.print(PASOS_POR_MM_Y, 4);
+  for (int i = 0; i < 4; i++) {
+    Serial.print(",v");
+    Serial.print(i + 1);
+    Serial.print("=");
+    Serial.print(POS_VASO_MM[i], 2);
+  }
+  Serial.print(",p1=");
+  Serial.print(POS_Y1);
+  Serial.print(",p2=");
+  Serial.print(POS_Y2);
+  Serial.print(",p3=");
+  Serial.print(POS_Y3);
+  Serial.print(",p4=");
+  Serial.print(POS_Y4);
+  Serial.print(",tope=");
+  Serial.print(LIMITE_FISICO_Y_PASOS);
+  Serial.print(",vmax=");
+  Serial.print(MAX_SPEED_Y / PASOS_POR_MM_Y, 2);
+  Serial.print(",y=");
+  Serial.println(posY);
+}
+
+// CAL_Y_SET:ppm=76.3636,v1=0,v2=55,v3=110,v4=165  (todos los campos opcionales)
+// Solo aplica en RAM: hay que mandar CAL_Y_SAVE para que sobreviva al reinicio.
+// Se valida el conjunto COMPLETO antes de tocar nada, para no dejar el banco con
+// media disposición vieja y media nueva si una de las posiciones es absurda.
+void procesarCalibracionY(String args) {
+  args.trim();
+
+  // Cambiar la geometría a mitad de receta dejaría los vasos repartidos entre
+  // la disposición vieja y la nueva, así que se rechaza y no se toca nada.
+  if (procesoActivo) {
+    Serial.println("CAL_Y_ERROR: No se puede cambiar la geometria con una receta en curso");
+    return;
+  }
+
+  float ppm = leerCampoCalibracion(args, "ppm");
+  if (isnan(ppm)) ppm = PASOS_POR_MM_Y;
+
+  float posiciones[4];
+  const char *claves[4] = { "v1", "v2", "v3", "v4" };
+  for (int i = 0; i < 4; i++) {
+    posiciones[i] = leerCampoCalibracion(args, claves[i]);
+    if (isnan(posiciones[i])) posiciones[i] = POS_VASO_MM[i];
+  }
+
+  if (!calibracionYValida(ppm, posiciones)) {
+    Serial.println("CAL_Y_ERROR: Valores fuera de rango o algun vaso no cabe en el eje");
+    return;
+  }
+
+  PASOS_POR_MM_Y = ppm;
+  for (int i = 0; i < 4; i++) POS_VASO_MM[i] = posiciones[i];
+  recalcularPosicionesY();
+
+  // posY no se toca: el cero sigue siendo el home físico. Lo que cambia es
+  // dónde quedan los cuatro vasos respecto a ese cero, y eso ya está aplicado.
+  Serial.println("CAL_Y_APLICADA");
+  enviarCalibracionY();
+}
 
 void setup() {
   Serial.begin(9600);
-  
+
+  // Antes que nada: la calibración guardada manda sobre los valores de fábrica,
+  // y de ella dependen todos los límites del eje Z.
+  cargarCalibracionZ();
+  // Lo mismo para Y: de la geometría guardada dependen las cuatro posiciones de
+  // los vasos, así que tiene que estar cargada antes de mover nada.
+  cargarCalibracionY();
+
   // Configurar pines Eje Y
   pinMode(dirPinY, OUTPUT);
   pinMode(stepPinY, OUTPUT);
@@ -167,6 +601,9 @@ void setup() {
   Serial.println("Sistema SILAR Iniciado");
   Serial.println("Hardware: Arduino Mega 2560 Rev3");
   Serial.println("Documento: MOC-ELEC-001");
+
+  // La aplicacion necesita las constantes de la maquina para mostrarlas
+  enviarConfig();
 }
 
 void loop() {
@@ -178,6 +615,11 @@ void loop() {
   limitMinSwitchZ.loop();
   limitMaxSwitchZ.loop();
   emergencySwitch.loop();
+
+  if (millis() - ultimoStatusMs >= STATUS_INTERVAL_MS) {
+    ultimoStatusMs = millis();
+    enviarStatus();
+  }
 
   // Verificar paro de emergencia (HIGH = ACTIVADO / ABIERTO / DETENER)
   bool emergenciaActiva = (emergencySwitch.getState() == HIGH);
@@ -240,7 +682,45 @@ void loop() {
     else if (comando.startsWith("START_RECIPE:")) {
       String jsonParams = comando.substring(13); // Extraer JSON después de "START_RECIPE:"
       parsearParametrosReceta(jsonParams);
+      usarEtapaUnica();
       iniciarProcesoAutomatico();
+    }
+    // Receta por etapas: RECIPE_BEGIN, un ADD_STAGE por etapa, y RECIPE_START.
+    // Van en lineas sueltas y no en un unico comando gigante porque el buffer
+    // serie del Arduino son 64 bytes: cada ADD_STAGE ocupa lo mismo que el
+    // START_RECIPE que ya funciona hoy. Cada uno contesta, y el PC espera esa
+    // respuesta antes de mandar el siguiente.
+    else if (comando == "RECIPE_BEGIN") {
+      totalEtapas = 0;
+      etapaActual = 0;
+      Serial.println("RECETA_ETAPAS_INICIO");
+    }
+    else if (comando.startsWith("ADD_STAGE:")) {
+      if (totalEtapas >= MAX_ETAPAS) {
+        Serial.print("ERROR: Maximo de etapas alcanzado (");
+        Serial.print(MAX_ETAPAS);
+        Serial.println(")");
+      } else {
+        // Se parsea sobre recipeParams, que aqui hace de borrador, y de ahi se
+        // copia a la etapa. Asi el parser y sus defaults son exactamente los
+        // mismos que los de una receta normal, sin una segunda copia que
+        // mantener.
+        parsearParametrosReceta(comando.substring(10));
+        etapas[totalEtapas] = recipeParams;
+        totalEtapas++;
+        Serial.print("ETAPA_AGREGADA: ");
+        Serial.print(totalEtapas);
+        Serial.print("/");
+        Serial.println(MAX_ETAPAS);
+      }
+    }
+    else if (comando == "RECIPE_START") {
+      if (totalEtapas == 0) {
+        Serial.println("ERROR: No hay etapas cargadas");
+      } else {
+        cargarEtapa(0);
+        iniciarProcesoAutomatico();
+      }
     }
     else if (comando == "PAUSE") {
       if (procesoActivo && !procesoPausado) {
@@ -258,8 +738,10 @@ void loop() {
       procesoActivo = false;
       procesoPausado = false;
       cicloActual = 0;
+      etapaActual = 0;
       digitalWrite(lampPin, LOW);
       digitalWrite(fanPin, LOW);
+      ventiladorActivo = false;
       Serial.println("PROCESO_DETENIDO");
     }
     else if (comando == "LAMP_ON") {
@@ -284,11 +766,63 @@ void loop() {
     else if (comando == "HW_STATUS") {
       enviarStatusHardware();
     }
+    else if (comando == "CONFIG") {
+      enviarConfig();
+    }
     else if (comando == "STEP_TEST_Y") {
       pruebaStepManual(stepPinY, dirPinY);
     }
     else if (comando == "STEP_TEST_Z") {
       pruebaStepManual(stepPinZ, dirPinZ);
+    }
+    // --- Calibración del eje Z desde la pantalla de administrador ---
+    // CAL_Z? consulta; CAL_Z_SET aplica en RAM (para poder probar antes de
+    // fijar); CAL_Z_SAVE persiste en EEPROM; CAL_Z_RESET vuelve a fábrica.
+    else if (comando == "CAL_Z?") {
+      enviarCalibracionZ();
+    }
+    else if (comando.startsWith("CAL_Z_SET:")) {
+      procesarCalibracionZ(comando.substring(10));
+    }
+    else if (comando == "CAL_Z_SAVE") {
+      guardarCalibracionZ();
+      Serial.println("CAL_Z_GUARDADA");
+      enviarCalibracionZ();
+    }
+    else if (comando == "CAL_Z_RESET") {
+      PASOS_POR_MM_Z = PASOS_POR_MM_Z_FABRICA;
+      ALTURA_HOME_MM = ALTURA_HOME_MM_FABRICA;
+      ALTURA_MINIMA_MM = ALTURA_MINIMA_MM_FABRICA;
+      recalcularLimitesZ();
+      guardarCalibracionZ();
+      Serial.println("CAL_Z_RESTAURADA");
+      enviarCalibracionZ();
+    }
+    // --- Geometría del eje Y (separación entre vasos y escala) ---
+    // Mismo protocolo de cuatro comandos que Z.
+    else if (comando == "CAL_Y?") {
+      enviarCalibracionY();
+    }
+    else if (comando.startsWith("CAL_Y_SET:")) {
+      procesarCalibracionY(comando.substring(10));
+    }
+    else if (comando == "CAL_Y_SAVE") {
+      guardarCalibracionY();
+      Serial.println("CAL_Y_GUARDADA");
+      enviarCalibracionY();
+    }
+    else if (comando == "CAL_Y_RESET") {
+      PASOS_POR_MM_Y = PASOS_POR_MM_Y_FABRICA;
+      for (int i = 0; i < 4; i++) POS_VASO_MM[i] = POS_VASO_MM_FABRICA[i];
+      recalcularPosicionesY();
+      guardarCalibracionY();
+      Serial.println("CAL_Y_RESTAURADA");
+      enviarCalibracionY();
+    }
+    // Va a una altura absoluta sobre el suelo, en mm. Es el comando de
+    // verificación: se pide 150 y se comprueba con la regla que dé 15.0 cm.
+    else if (comando.startsWith("GOTO_MM:")) {
+      moverEjeZaAltura(comando.substring(8).toFloat());
     }
     else {
       Serial.print("Error: Comando desconocido: ");
@@ -312,10 +846,15 @@ void parsearParametrosReceta(String json) {
   recipeParams.exceptDripping2 = false;
   recipeParams.exceptDripping3 = false;
   recipeParams.exceptDripping4 = false;
-  recipeParams.dipStartPosition = 0;
-  recipeParams.dippingLength = 10000; // 10000 pasos por defecto
-  recipeParams.transferSpeed = 1000;  // microsegundos entre pasos
-  recipeParams.dipSpeed = 1000;
+  recipeParams.dipStartPosition = 0;   // 0 = no posicionar, sin techo
+  recipeParams.dippingLength = 30.0f;  // 30 mm de inmersión por defecto
+  // Equivalentes exactos a los defaults que tenía el sketch cuando estos campos
+  // se expresaban en microsegundos: 1000 us = 500 pasos/s en ambos ejes. Se dejan
+  // idénticos a propósito, porque este cambio corrige la unidad, no la velocidad
+  // a la que venían corriendo las recetas que no traen el campo.
+  recipeParams.transferSpeedMMs = 500.0f / PASOS_POR_MM_Y;  // ~6.5 mm/s
+  recipeParams.dipSpeedMMs = 500.0f / PASOS_POR_MM_Z;       // 25 mm/s
+  for (int i = 0; i < 4; i++) recipeParams.posVasoMM[i] = 0.0f;  // 0 = geometría de la máquina
   recipeParams.fan = false;
   
   // Extraer valores del JSON (parser simple)
@@ -397,7 +936,7 @@ void parsearParametrosReceta(String json) {
     int end = json.indexOf(",", start);
     if (end < 0) end = json.indexOf("}", start);
     if (end > start) {
-      recipeParams.dipStartPosition = json.substring(start, end).toInt();
+      recipeParams.dipStartPosition = json.substring(start, end).toFloat();
     }
   }
   
@@ -408,34 +947,71 @@ void parsearParametrosReceta(String json) {
     int end = json.indexOf(",", start);
     if (end < 0) end = json.indexOf("}", start);
     if (end > start) {
-      recipeParams.dippingLength = json.substring(start, end).toInt();
+      recipeParams.dippingLength = json.substring(start, end).toFloat();
     }
   }
   
-  // Transfer speed
+  // Transfer speed (mm/s). Un valor no positivo deja el default de arriba: antes
+  // había un mínimo de 100 aquí, que tenía sentido cuando el campo era
+  // microsegundos y hoy sería un mínimo de 100 mm/s, muy por encima del eje.
+  // El tope real lo pone MAX_SPEED_Y al mover.
   idx = json.indexOf("\"transferSpeed\":");
   if (idx >= 0) {
     int start = idx + 16;
     int end = json.indexOf(",", start);
     if (end < 0) end = json.indexOf("}", start);
     if (end > start) {
-      recipeParams.transferSpeed = json.substring(start, end).toInt();
-      if (recipeParams.transferSpeed < 100) recipeParams.transferSpeed = 100; // Mínimo
+      float v = json.substring(start, end).toFloat();
+      if (v > 0.0f) recipeParams.transferSpeedMMs = v;
     }
   }
-  
-  // Dip speed
+
+  // Dip speed (mm/s). Mismo criterio; el tope lo pone MAX_SPEED_Z.
   idx = json.indexOf("\"dipSpeed\":");
   if (idx >= 0) {
     int start = idx + 11;
     int end = json.indexOf(",", start);
     if (end < 0) end = json.indexOf("}", start);
     if (end > start) {
-      recipeParams.dipSpeed = json.substring(start, end).toInt();
-      if (recipeParams.dipSpeed < 100) recipeParams.dipSpeed = 100; // Mínimo
+      float v = json.substring(start, end).toFloat();
+      if (v > 0.0f) recipeParams.dipSpeedMMs = v;
     }
   }
   
+  // Posición de cada vaso en mm (posY1..posY4). Opcionales: lo que no venga, o
+  // venga en 0, se resuelve con la geometría de la máquina al mover. Se leen en
+  // bucle porque las cuatro claves miden lo mismo y solo cambia el dígito.
+  for (int i = 0; i < 4; i++) {
+    String clave = "\"posY";
+    clave += (i + 1);
+    clave += "\":";
+    idx = json.indexOf(clave);
+    if (idx >= 0) {
+      int start = idx + clave.length();
+      int end = json.indexOf(",", start);
+      if (end < 0) end = json.indexOf("}", start);
+      if (end > start) {
+        float v = json.substring(start, end).toFloat();
+        if (v > 0.0f) recipeParams.posVasoMM[i] = v;
+      }
+    }
+
+    // Un vaso más allá del final de carrera no da error por sí solo: el eje se
+    // estampa contra el tope en esa transferencia y la inmersión se hace donde
+    // no toca. Se recorta aquí, con la receta a la vista, y se avisa una vez.
+    float tope = LIMITE_FISICO_Y_PASOS / PASOS_POR_MM_Y;
+    if (recipeParams.posVasoMM[i] > tope) {
+      Serial.print("ADVERTENCIA: Vaso ");
+      Serial.print(i + 1);
+      Serial.print(" recortado de ");
+      Serial.print(recipeParams.posVasoMM[i], 1);
+      Serial.print(" a ");
+      Serial.print(tope, 1);
+      Serial.println(" mm (final de carrera)");
+      recipeParams.posVasoMM[i] = tope;
+    }
+  }
+
   // Fan
   recipeParams.fan = json.indexOf("\"fan\":true") >= 0;
   
@@ -448,7 +1024,31 @@ void parsearParametrosReceta(String json) {
   Serial.print(", Wait2=");
   Serial.print(recipeParams.dippingWait2);
   Serial.print(", Wait3=");
-  Serial.println(recipeParams.dippingWait3);
+  Serial.print(recipeParams.dippingWait3);
+  Serial.print(", DipStart=");
+  Serial.print(recipeParams.dipStartPosition, 1);
+  Serial.print("mm/");
+  Serial.print(alturaMMaPasosZ(recipeParams.dipStartPosition));
+  Serial.print("pasos, DipLen=");
+  Serial.print(recipeParams.dippingLength, 1);
+  Serial.print("mm/");
+  Serial.print(mmAPasosZ(recipeParams.dippingLength));
+  Serial.print("pasos, DipSpeed=");
+  Serial.print(recipeParams.dipSpeedMMs, 2);
+  Serial.print("mm/s (");
+  Serial.print(velocidadMMsAMicros(recipeParams.dipSpeedMMs, PASOS_POR_MM_Z));
+  Serial.print("us), TransferSpeed=");
+  Serial.print(recipeParams.transferSpeedMMs, 2);
+  Serial.print("mm/s (");
+  Serial.print(velocidadMMsAMicros(recipeParams.transferSpeedMMs, PASOS_POR_MM_Y));
+  Serial.print("us), Vasos=");
+  // Se imprime la posición que se va a usar de verdad, no la que trajo el JSON:
+  // así se ve de un vistazo cuáles vienen de la receta y cuáles de la máquina.
+  for (int i = 0; i < 4; i++) {
+    if (i > 0) Serial.print("/");
+    Serial.print(posicionVasoPasos(i) / PASOS_POR_MM_Y, 1);
+  }
+  Serial.println("mm");
 }
 
 void pausarProcesoLimite() {
@@ -456,6 +1056,97 @@ void pausarProcesoLimite() {
     procesoPausado = true;
     Serial.println("PROCESO_PAUSADO");
   }
+}
+
+// El ventilador es un parametro POR ETAPA, asi que puede cambiar al pasar de
+// una a otra. Solo se toca el pin cuando el estado cambia de verdad: encadenar
+// dos etapas que lo quieren encendido no debe apagarlo un instante en medio.
+void aplicarVentilador(bool encendido) {
+  if (encendido == ventiladorActivo) return;
+  ventiladorActivo = encendido;
+  digitalWrite(fanPin, encendido ? HIGH : LOW);
+  Serial.println(encendido ? "VENTILADOR_ACTIVADO" : "VENTILADOR_DESACTIVADO");
+}
+
+// Lleva Z a la altura inicial de la etapa en vigor y fija el techo de esa etapa.
+// Esto NO es un home: es el unico movimiento que ocurre entre una etapa y la
+// siguiente, y solo si cambia la altura de partida.
+void aplicarPosicionInicialZ() {
+  techoZReceta = 0;
+  if (recipeParams.dipStartPosition <= 0.0f) return;
+
+  long objetivoZ = alturaMMaPasosZ(recipeParams.dipStartPosition);
+  techoZReceta = objetivoZ;
+
+  Serial.print("POSICION_INICIAL: ");
+  Serial.print(recipeParams.dipStartPosition, 1);
+  Serial.print(" mm sobre el suelo -> Z=");
+  Serial.println(objetivoZ);
+
+  long delta = objetivoZ - posZ;
+  if (delta != 0) {
+    // A velocidad normal, no la de la receta: ver MICROS_POSICIONAMIENTO_Z.
+    moverEjeZVelocidad(delta, MICROS_POSICIONAMIENTO_Z);
+  }
+  Serial.print("POSICION_INICIAL_ALCANZADA: Z=");
+  Serial.println(posZ);
+}
+
+// Pone la etapa indicada en vigor. A partir de aqui recipeParams es esa etapa.
+void cargarEtapa(int indice) {
+  if (indice < 0 || indice >= totalEtapas) return;
+  etapaActual = indice;
+  recipeParams = etapas[indice];
+  cicloActual = 0;
+  ciclosTotales = recipeParams.cycles;
+}
+
+void anunciarEtapa() {
+  Serial.print("ETAPA_INICIADA: ");
+  Serial.print(etapaActual + 1);
+  Serial.print("/");
+  Serial.print(totalEtapas);
+  Serial.print(" Ciclos=");
+  Serial.println(ciclosTotales);
+}
+
+// Cierra la etapa en curso y arranca la siguiente sin home y sin pausa.
+// Devuelve false cuando ya no queda ninguna, es decir cuando la receta termino.
+bool avanzarEtapa() {
+  Serial.print("ETAPA_COMPLETADA: ");
+  Serial.print(etapaActual + 1);
+  Serial.print("/");
+  Serial.println(totalEtapas);
+
+  if (etapaActual + 1 >= totalEtapas) return false;
+
+  cargarEtapa(etapaActual + 1);
+  aplicarVentilador(recipeParams.fan);
+  aplicarPosicionInicialZ();
+  anunciarEtapa();
+  return true;
+}
+
+void finalizarProceso() {
+  procesoActivo = false;
+  Serial.println("PROCESO_COMPLETADO");
+
+  digitalWrite(lampPin, LOW);
+  Serial.println("LAMPARA_DESACTIVADA");
+  aplicarVentilador(false);
+
+  // Regresar a Home automáticamente al finalizar la receta exitosamente
+  Serial.println("PROCESO_FINALIZADO: Regresando a Home automaticamente...");
+  ejecutarHome();
+}
+
+// Deja una sola etapa cargada con lo que ya hay en recipeParams. Es el camino
+// de la receta normal de toda la vida: una receta sin etapas es una receta de
+// una sola etapa, y asi el resto del firmware no necesita distinguirlas.
+void usarEtapaUnica() {
+  etapas[0] = recipeParams;
+  totalEtapas = 1;
+  etapaActual = 0;
 }
 
 void iniciarProcesoAutomatico() {
@@ -469,7 +1160,9 @@ void iniciarProcesoAutomatico() {
   cicloActual = 0;
   ciclosTotales = recipeParams.cycles;
   
-  Serial.print("PROCESO_INICIADO: Ciclos=");
+  Serial.print("PROCESO_INICIADO: Etapas=");
+  Serial.print(totalEtapas);
+  Serial.print(", Ciclos=");
   Serial.println(ciclosTotales);
   
   // Activar lámpara interior al iniciar proceso
@@ -477,27 +1170,32 @@ void iniciarProcesoAutomatico() {
   Serial.println("LAMPARA_ACTIVADA");
   
   // Activar ventilador si está configurado
-  if (recipeParams.fan) {
-    digitalWrite(fanPin, HIGH);
-    Serial.println("VENTILADOR_ACTIVADO");
-  }
+  aplicarVentilador(recipeParams.fan);
+
+  // Posicionar Z en la altura inicial de la receta antes del primer ciclo.
+  aplicarPosicionInicialZ();
+
+  // Diagnóstico: estas son EXACTAMENTE las cuatro condiciones que loop() evalúa
+  // para llamar a ejecutarProcesoAutomatico(). Si el ciclo no arranca después
+  // del posicionamiento, aquí se ve cuál de ellas quedó mal.
+  Serial.print("PROCESO_LISTO: activo=");
+  Serial.print(procesoActivo);
+  Serial.print(" pausado=");
+  Serial.print(procesoPausado);
+  Serial.print(" emergencia=");
+  Serial.print(emergencyStop);
+  Serial.print(" modo=");
+  Serial.print(modo);
+  Serial.print(" ciclo=");
+  Serial.print(cicloActual);
+  Serial.print("/");
+  Serial.println(ciclosTotales);
 }
 
 void ejecutarProcesoAutomatico() {
-  // Verificar si hay un ciclo pendiente de ejecutar
+  // Verificar si hay un ciclo pendiente de ejecutar en la etapa en vigor
   if (cicloActual >= ciclosTotales) {
-    // Proceso completado
-    procesoActivo = false;
-    Serial.println("PROCESO_COMPLETADO");
-    
-    // Desactivar accesorios
-    digitalWrite(lampPin, LOW);
-    Serial.println("LAMPARA_DESACTIVADA");
-    
-    if (recipeParams.fan) {
-      digitalWrite(fanPin, LOW);
-      Serial.println("VENTILADOR_DESACTIVADO");
-    }
+    if (!avanzarEtapa()) finalizarProceso();
     return;
   }
   
@@ -509,25 +1207,25 @@ void ejecutarProcesoAutomatico() {
   
   // Ejecutar inmersiones en cada posición Y
   if (!recipeParams.exceptDripping1) {
-    ejecutarInmersion(POS_Y1, recipeParams.dippingWait0, 1);
+    ejecutarInmersion(posicionVasoPasos(0), recipeParams.dippingWait0, 1);
   }
   
   if (!procesoActivo || procesoPausado || emergencyStop) return;
   
   if (!recipeParams.exceptDripping2) {
-    ejecutarInmersion(POS_Y2, recipeParams.dippingWait1, 2);
+    ejecutarInmersion(posicionVasoPasos(1), recipeParams.dippingWait1, 2);
   }
   
   if (!procesoActivo || procesoPausado || emergencyStop) return;
   
   if (!recipeParams.exceptDripping3) {
-    ejecutarInmersion(POS_Y3, recipeParams.dippingWait2, 3);
+    ejecutarInmersion(posicionVasoPasos(2), recipeParams.dippingWait2, 3);
   }
   
   if (!procesoActivo || procesoPausado || emergencyStop) return;
   
   if (!recipeParams.exceptDripping4) {
-    ejecutarInmersion(POS_Y4, recipeParams.dippingWait3, 4);
+    ejecutarInmersion(posicionVasoPasos(3), recipeParams.dippingWait3, 4);
   }
   
   if (!procesoActivo || procesoPausado || emergencyStop) return;
@@ -540,23 +1238,10 @@ void ejecutarProcesoAutomatico() {
   // Incrementar ciclo actual
   cicloActual++;
   
-  // Si se completaron todos los ciclos, finalizar proceso
+  // Si se completaron todos los ciclos de la etapa, encadenar la siguiente.
+  // La lampara no se apaga aqui: solo cuando se acaba la ultima etapa.
   if (cicloActual >= ciclosTotales) {
-    procesoActivo = false;
-    Serial.println("PROCESO_COMPLETADO");
-    
-    // Desactivar accesorios
-    digitalWrite(lampPin, LOW);
-    Serial.println("LAMPARA_DESACTIVADA");
-    
-    if (recipeParams.fan) {
-      digitalWrite(fanPin, LOW);
-      Serial.println("VENTILADOR_DESACTIVADO");
-    }
-
-    // Regresar a Home automáticamente al finalizar la receta exitosamente
-    Serial.println("PROCESO_FINALIZADO: Regresando a Home automaticamente...");
-    ejecutarHome();
+    if (!avanzarEtapa()) finalizarProceso();
   }
 }
 
@@ -578,12 +1263,26 @@ void ejecutarInmersion(long posYTarget, int tiempoEspera, int numInmersion) {
   
   if (!procesoActivo || procesoPausado || emergencyStop) return;
   
-  // CORRECCIÓN: Limitar la inmersión para que no descuadre la subida y choque arriba
-  long bajadaReal = recipeParams.dippingLength;
-  if (bajadaReal > 4100) bajadaReal = 4100; // Nuestro tope de seguridad verificado
-  
+  long zAntesDeBajar = posZ;
+  long bajadaReal = mmAPasosZ(recipeParams.dippingLength);
+
+  // Recortar la profundidad si chocaría con el fondo del eje. moverEjeZVelocidad
+  // también lo haría, pero aquí se puede avisar en mm, que es lo que el operador
+  // escribió en la receta.
+  long margenDisponible = zAntesDeBajar - LIMITE_SOFTWARE_Z_ABAJO;
+  if (margenDisponible < 0) margenDisponible = 0;
+  if (bajadaReal > margenDisponible) {
+    bajadaReal = margenDisponible;
+    Serial.print("ADVERTENCIA: Inmersion recortada a ");
+    Serial.print(bajadaReal / PASOS_POR_MM_Z, 1);
+    Serial.print(" mm de los ");
+    Serial.print(recipeParams.dippingLength, 1);
+    Serial.println(" mm pedidos (fondo del eje)");
+  }
+
   // Bajar Z para inmersión (Z- baja físicamente con setPinsInverted)
-  moverEjeZVelocidad(-bajadaReal, recipeParams.dipSpeed);
+  long microsDip = velocidadMMsAMicros(recipeParams.dipSpeedMMs, PASOS_POR_MM_Z);
+  moverEjeZVelocidad(-bajadaReal, microsDip);
   
   if (!procesoActivo || procesoPausado || emergencyStop) return;
   
@@ -598,8 +1297,10 @@ void ejecutarInmersion(long posYTarget, int tiempoEspera, int numInmersion) {
   
   if (!procesoActivo || procesoPausado || emergencyStop) return;
   
-  // Subir Z EXACTAMENTE lo mismo que bajó, para quedar en 0 perfecto y no chocar arriba
-  moverEjeZVelocidad(bajadaReal, recipeParams.dipSpeed);
+  // Subir EXACTAMENTE lo que realmente bajó, leyendo la posición real en vez de
+  // la solicitada: si el límite virtual o un switch recortó el descenso, esto
+  // evita subir de más y chocar arriba.
+  moverEjeZVelocidad(zAntesDeBajar - posZ, microsDip);
   
   Serial.print("INMERSION_COMPLETADA: Y");
   Serial.println(numInmersion);
@@ -648,24 +1349,40 @@ void moverEjeZVelocidad(long pasos, long velocidadMicrosegundos) {
   bool direccionPositiva = (pasos > 0);
   long objetivo = posZ + pasos;
 
-  // Límite virtual de seguridad (Software Limit)
-  // AXEL: Modifica este número si necesitas que baje más o menos.
-  // Es negativo porque va hacia abajo. Ej: -15000 baja menos, -30000 baja más.
-  const long LIMITE_SOFTWARE_Z_ABAJO = -4100; 
-  
+  // Límite virtual de seguridad (Software Limit).
+  // Ya no es un número mágico: sale de ALTURA_MINIMA_MM y la calibración,
+  // declaradas junto a las constantes del eje Z al principio del sketch.
   if (!direccionPositiva && objetivo < LIMITE_SOFTWARE_Z_ABAJO) {
     objetivo = LIMITE_SOFTWARE_Z_ABAJO;
     Serial.println("ADVERTENCIA: Limite virtual de Z alcanzado");
   }
 
+  // Techo de la receta: mientras el proceso automático corre, Z no puede subir
+  // por encima de la altura inicial declarada en dipStartPosition.
+  // No aplica al homing ni al modo manual, que dejan techoZReceta en 0.
+  if (direccionPositiva && procesoActivo && techoZReceta != 0 && objetivo > techoZReceta) {
+    objetivo = techoZReceta;
+    Serial.println("ADVERTENCIA: Techo de receta alcanzado en Z");
+  }
+
   // Convertir microsegundos entre flancos a pasos/segundo (aproximado)
   long microsClamped = velocidadMicrosegundos <= 0 ? 200 : velocidadMicrosegundos;
   float velocidadTarget = 1000000.0f / (2.0f * microsClamped); // dos flancos por ciclo
-  if (velocidadTarget > MAX_SPEED_Z) velocidadTarget = MAX_SPEED_Z;
+  if (velocidadTarget > MAX_SPEED_Z) {
+    velocidadTarget = MAX_SPEED_Z;
+    Serial.print("ADVERTENCIA: Velocidad Z recortada a ");
+    Serial.print(MAX_SPEED_Z / PASOS_POR_MM_Z, 1);
+    Serial.println(" mm/s (tope del eje)");
+  }
   if (velocidadTarget < 10.0f) velocidadTarget = 10.0f;
 
   float aceleracion = velocidadTarget * 2.0f;
   if (aceleracion < 100.0f) aceleracion = 100.0f;
+  // Techo mecánico del eje. Sin esto, cualquier tramo rápido (el posicionamiento
+  // inicial va a MAX_SPEED_Z) pedía 4000 pasos/s^2 contra los 1500 que aguanta
+  // Z, y los pasos perdidos descuadran posZ en silencio: la altura en mm deja de
+  // corresponder con la real y la inmersión siguiente baja de más.
+  if (aceleracion > MAX_ACCEL_Z) aceleracion = MAX_ACCEL_Z;
 
   float velocidadAnterior = stepperZ.maxSpeed();
   float aceleracionAnterior = stepperZ.acceleration();
@@ -750,7 +1467,10 @@ void ejecutarHome() {
     Serial.println("Error: Paro de emergencia activo");
     return;
   }
-  
+
+  // El home tiene que poder llegar hasta arriba del todo, sin el techo de receta.
+  techoZReceta = 0;
+
   // Habilitar motores antes de mover
   digitalWrite(enablePinY, LOW);
   digitalWrite(enablePinZ, LOW);
@@ -827,7 +1547,27 @@ void moverEjeY(long pasos) {
   bool direccionPositiva = (pasos > 0);
   long objetivo = posY + pasos;
 
-  stepperY.setMaxSpeed(MAX_SPEED_Y);
+  // Durante una receta la velocidad de Y la manda transferSpeedMMs, en mm/s. Aquí
+  // se pasa a pasos/s directamente, sin dar el rodeo por microsegundos, porque
+  // AccelStepper ya trabaja en pasos/s. En manual se usa la velocidad máxima,
+  // para que el jog no dependa de la última receta cargada.
+  // Esta misma velocidad rige el regreso de Y4 a Y1 entre ciclos: ese tramo no es
+  // un movimiento aparte, es la primera inmersión del ciclo siguiente.
+  float velocidadY = MAX_SPEED_Y;
+  if (procesoActivo) {
+    velocidadY = recipeParams.transferSpeedMMs * PASOS_POR_MM_Y;
+    if (velocidadY > MAX_SPEED_Y) {
+      velocidadY = MAX_SPEED_Y;
+      Serial.print("ADVERTENCIA: Velocidad Y recortada a ");
+      Serial.print(MAX_SPEED_Y / PASOS_POR_MM_Y, 1);
+      Serial.print(" mm/s de los ");
+      Serial.print(recipeParams.transferSpeedMMs, 1);
+      Serial.println(" mm/s pedidos (tope del eje)");
+    }
+    if (velocidadY < 10.0f) velocidadY = 10.0f;
+  }
+
+  stepperY.setMaxSpeed(velocidadY);
   stepperY.setAcceleration(MAX_ACCEL_Y);
 
   Serial.print("Moviendo Y: ");
@@ -910,8 +1650,26 @@ void moverEjeZ(long pasos) {
   bool direccionPositiva = (pasos > 0);
   long objetivo = posZ + pasos;
 
+  // El jog manual comparte el mismo fondo que el movimiento por receta.
+  // Sin esto, un Z-9999 desde el monitor serial se lleva el sustrato al suelo.
+  if (!direccionPositiva && objetivo < LIMITE_SOFTWARE_Z_ABAJO) {
+    objetivo = LIMITE_SOFTWARE_Z_ABAJO;
+    Serial.print("ADVERTENCIA: Limite virtual de Z alcanzado (");
+    Serial.print(ALTURA_MINIMA_MM, 1);
+    Serial.println(" mm sobre el suelo)");
+  }
+
   stepperZ.setMaxSpeed(MAX_SPEED_Z);
   stepperZ.setAcceleration(MAX_ACCEL_Z);
+
+  // Esta función solo la invoca el comando serial "Z": es jog manual puro, la
+  // receta usa moverEjeZVelocidad. Por eso el movimiento se permite aunque haya
+  // un proceso pausado: si un límite pausó la receta, mover el eje a mano es
+  // justo lo que hace falta para rescatarlo, y bloquearlo dejaba la máquina
+  // muerta sin más salida que STOP.
+  if (procesoActivo && procesoPausado) {
+    Serial.println("AVISO: Receta pausada. El jog manual la descuadrara si luego se reanuda con RESUME.");
+  }
 
   Serial.print("Moviendo Z: ");
   Serial.print(direccionPositiva ? "+" : "-");
@@ -948,11 +1706,7 @@ void moverEjeZ(long pasos) {
       stepperZ.stop();
       break;
     }
-    if (procesoActivo && procesoPausado) {
-      Serial.println("Movimiento Z pausado");
-      stepperZ.stop();
-      break;
-    }
+    // NO se corta el movimiento por procesoPausado: ver el aviso de arriba.
 
     // 3. Verificar límites físicos
     // Subir (Z+) → verificar homeSwitchZ (switch físico en pin 14)
@@ -998,6 +1752,8 @@ void enviarStatus() {
   Serial.print(posY);
   Serial.print(",Z=");
   Serial.print(posZ);
+  Serial.print(",Zmm=");
+  Serial.print(pasosZaAlturaMM(posZ), 1);
   Serial.print(",HomeY=");
   Serial.print(digitalRead(homePinY) == HIGH ? "1" : "0");
   Serial.print(",HomeZ=");
@@ -1014,6 +1770,31 @@ void enviarStatus() {
   Serial.print(digitalRead(lampPin) == HIGH ? "1" : "0");
   Serial.print(",Fan=");
   Serial.println(digitalRead(fanPin) == HIGH ? "1" : "0");
+}
+
+// Publica la geometria de la maquina (posiciones de vasos y calibracion de los
+// dos ejes). Cambia solo al recalibrar, por eso se envia una vez al arrancar y
+// cuando el PC la pide con "CONFIG", en lugar de repetirla en cada STATUS.
+// Ojo: quien recalibre Y por CAL_Y_* debe releer esto, porque Y1..Y4 se mueven.
+void enviarConfig() {
+  Serial.print("CONFIG:");
+  Serial.print("Y1=");
+  Serial.print(POS_Y1);
+  Serial.print(",Y2=");
+  Serial.print(POS_Y2);
+  Serial.print(",Y3=");
+  Serial.print(POS_Y3);
+  Serial.print(",Y4=");
+  Serial.print(POS_Y4);
+  Serial.print(",HomeY=0");
+  Serial.print(",AlturaHomeMM=");
+  Serial.print(ALTURA_HOME_MM, 1);
+  Serial.print(",AlturaMinimaMM=");
+  Serial.print(ALTURA_MINIMA_MM, 1);
+  Serial.print(",PasosPorMMZ=");
+  Serial.print(PASOS_POR_MM_Z, 3);
+  Serial.print(",PasosPorMMY=");
+  Serial.println(PASOS_POR_MM_Y, 3);
 }
 
 void pruebaStepManual(int pinStep, int pinDir) {

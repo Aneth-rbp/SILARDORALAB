@@ -1,6 +1,6 @@
 {
   "name": "silar-system",
-  "version": "2.2.2",
+  "version": "2.3.0",
   "description": "Sistema de control SILAR para laboratorio local",
   "main": "src/main.js",
   "scripts": {
@@ -8,6 +8,7 @@
     "dev": "electron . --dev",
     "web": "node server.js",
     "build": "electron-builder",
+    "release": "electron-builder --win --publish always",
     "setup-db": "setup-database.bat",
     "update-db": "mysql -u root < update-database.sql",
     "clean": "rm -rf node_modules package-lock.json",
@@ -33,11 +34,12 @@
     "eslint": "^8.0.0"
   },
   "dependencies": {
+    "crypto": "^1.0.1",
+    "electron-updater": "^6.8.9",
     "express": "^4.18.0",
-    "socket.io": "^4.7.0",
     "mysql2": "^3.6.0",
     "serialport": "^12.0.0",
-    "crypto": "^1.0.1"
+    "socket.io": "^4.7.0"
   },
   "build": {
     "appId": "com.doralab.silar",
@@ -64,8 +66,17 @@
       "allowElevation": true,
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
-      "artifactName": "SILAR-System-Setup-${version}.exe"
+      "artifactName": "SILAR-System-Setup-${version}.exe",
+      "differentialPackage": true
     },
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "Aneth-rbp",
+        "repo": "SILARDORALAB",
+        "releaseType": "release"
+      }
+    ],
     "asar": false
   }
 }

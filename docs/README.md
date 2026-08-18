@@ -15,6 +15,12 @@ Bienvenido a la documentación completa del Sistema SILAR - Control de Laborator
 - **[Arquitectura del Sistema](./arduino/architecture.md)** - Diagramas y flujos de datos
 - **[Sistema de Flash](./arduino/flasher.md)** - Flash automático del firmware
 
+### 🧪 Recetas
+- **[Recetas por etapas](./recetas-por-etapas.md)** - Encadenar varios juegos de parámetros en una sola corrida
+
+### 🔄 Despliegue
+- **[Actualizaciones remotas (OTA)](./actualizaciones.md)** - Publicar versiones y actualizar el equipo del laboratorio sin ir en persona
+
 ### 🌐 API Reference
 - **[API Arduino REST](./api/arduino-api.md)** - Endpoints y ejemplos de uso
 

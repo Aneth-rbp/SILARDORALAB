@@ -22,6 +22,11 @@ class ResponseParser {
             return null;
         }
 
+        // CONFIG primero: sus claves (HomeY, Y1...) podrían confundir a otros
+        // parsers que buscan subcadenas
+        const configResult = this.parseConfig(trimmedLine);
+        if (configResult) return configResult;
+
         // Intentar parsear como modo
         const modeResult = this.parseMode(trimmedLine);
         if (modeResult) return modeResult;
@@ -34,10 +39,6 @@ class ResponseParser {
         const limitResult = this.parseLimit(trimmedLine);
         if (limitResult) return limitResult;
 
-        // Intentar parsear como posición
-        const positionResult = this.parsePosition(trimmedLine);
-        if (positionResult) return positionResult;
-
         // Intentar parsear como emergencia
         const emergencyResult = this.parseEmergency(trimmedLine);
         if (emergencyResult) return emergencyResult;
@@ -46,9 +47,14 @@ class ResponseParser {
         const statusResult = this.parseStatus(trimmedLine);
         if (statusResult) return statusResult;
 
-        // Intentar parsear como movimiento
+        // Movimiento antes que posición: "Moviendo Y: -100" debe leerse como
+        // movimiento, no como posición absoluta
         const movementResult = this.parseMovement(trimmedLine);
         if (movementResult) return movementResult;
+
+        // Intentar parsear como posición
+        const positionResult = this.parsePosition(trimmedLine);
+        if (positionResult) return positionResult;
 
         // Intentar parsear como error
         const errorResult = this.parseError(trimmedLine);
@@ -58,10 +64,78 @@ class ResponseParser {
         const sensorsResult = this.parseSensors(trimmedLine);
         if (sensorsResult) return sensorsResult;
 
+        // Intentar parsear como avance de etapa (recetas por etapas)
+        const stageResult = this.parseStage(trimmedLine);
+        if (stageResult) return stageResult;
+
         // Si no coincide con ningún patrón, retornar mensaje genérico
         return {
             type: 'message',
             raw: trimmedLine,
+            timestamp: new Date().toISOString()
+        };
+    }
+
+    /**
+     * Parsea el avance de una receta por etapas.
+     *
+     * El firmware anuncia "ETAPA_INICIADA: 2/3 Ciclos=6" al entrar en cada
+     * tramo y "ETAPA_COMPLETADA: 2/3" al salir. Es lo que permite a la pantalla
+     * decir en qué punto de la secuencia va la corrida; sin esto el operador
+     * solo vería un contador de ciclos que se reinicia sin explicación cada vez
+     * que cambia de etapa.
+     */
+    static parseStage(line) {
+        const match = RESPONSE_PATTERNS.ETAPA.exec(line);
+        if (!match) return null;
+
+        const cyclesMatch = /Ciclos=(\d+)/.exec(line);
+
+        return {
+            type: 'stage',
+            event: match[1] === 'INICIADA' ? 'started' : 'completed',
+            stage: parseInt(match[2], 10),
+            totalStages: parseInt(match[3], 10),
+            cycles: cyclesMatch ? parseInt(cyclesMatch[1], 10) : null,
+            raw: line,
+            timestamp: new Date().toISOString()
+        };
+    }
+
+    /**
+     * Parsea la línea CONFIG del firmware.
+     * Contiene la geometría de la máquina (posiciones de los vasos y
+     * calibración de ambos ejes). El Arduino la envía al arrancar y cuando se
+     * le manda el comando CONFIG. Y1..Y4 dejaron de ser fijas: dependen de la
+     * separación entre vasos, así que hay que releerla tras calibrar Y.
+     */
+    static parseConfig(line) {
+        if (!line.startsWith('CONFIG:')) {
+            return null;
+        }
+
+        const configData = {};
+        line.substring(7).split(',').forEach(part => {
+            const [key, value] = part.split('=');
+            if (!key || value === undefined) return;
+
+            switch (key) {
+                case 'Y1': configData.setY1 = parseInt(value); break;
+                case 'Y2': configData.setY2 = parseInt(value); break;
+                case 'Y3': configData.setY3 = parseInt(value); break;
+                case 'Y4': configData.setY4 = parseInt(value); break;
+                case 'HomeY': configData.setHomeY = parseInt(value); break;
+                case 'AlturaHomeMM': configData.alturaHomeMM = parseFloat(value); break;
+                case 'AlturaMinimaMM': configData.alturaMinimaMM = parseFloat(value); break;
+                case 'PasosPorMMZ': configData.pasosPorMMZ = parseFloat(value); break;
+                case 'PasosPorMMY': configData.pasosPorMMY = parseFloat(value); break;
+            }
+        });
+
+        return {
+            type: 'config',
+            ...configData,
+            message: line,
             timestamp: new Date().toISOString()
         };
     }
@@ -163,6 +237,9 @@ class ResponseParser {
             { pattern: /Limite\s+Y\s+Max\s+alcanzado/i, axis: 'Y', limit: 'MAX' },
             { pattern: /Limite\s+Z\s+Min\s+alcanzado/i, axis: 'Z', limit: 'MIN' },
             { pattern: /Limite\s+Z\s+Max\s+alcanzado/i, axis: 'Z', limit: 'MAX' },
+            // El firmware avisa del tope de arriba de Z con "Home", no con "Min":
+            // sin este patrón el mensaje no encajaba en ninguno y se perdía.
+            { pattern: /Limite\s+Z\s+Home\s+alcanzado/i, axis: 'Z', limit: 'HOME' },
             // Patrón genérico como fallback
             { pattern: /Limite\s+Y\s+(Min|Max)/i, axis: 'Y', limit: null },
             { pattern: /Limite\s+Z\s+(Min|Max)/i, axis: 'Z', limit: null }
@@ -307,6 +384,22 @@ class ResponseParser {
                     statusData.mode = value;
                 } else if (key === 'Emergency') {
                     statusData.emergencyStop = value === '1';
+                } else if (key === 'ProcessActive') {
+                    statusData.processActive = value === '1';
+                } else if (key === 'ProcessPaused') {
+                    statusData.processPaused = value === '1';
+                } else if (key === 'Cycle') {
+                    // Formato "actual/total"
+                    const [current, total] = value.split('/');
+                    statusData.cycleCurrent = parseInt(current) || 0;
+                    statusData.cycleTotal = parseInt(total) || 0;
+                } else if (key === 'Lamp') {
+                    statusData.lamp = value === '1';
+                } else if (key === 'Fan') {
+                    statusData.fan = value === '1';
+                } else if (key === 'Zmm') {
+                    // Altura real del portamuestras en milímetros
+                    statusData.positionZmm = parseFloat(value);
                 } else if (key === 'Y' || key === 'Z') {
                     statusData[`position${key}`] = parseInt(value);
                 } else if (key.startsWith('Home')) {
