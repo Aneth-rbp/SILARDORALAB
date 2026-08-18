@@ -1,6 +1,6 @@
 {
   "name": "silar-system",
-  "version": "2.3.6",
+  "version": "2.3.7",
   "description": "Sistema de control SILAR para laboratorio local",
   "main": "src/main.js",
   "scripts": {
