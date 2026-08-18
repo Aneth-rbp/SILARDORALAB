@@ -43,6 +43,11 @@ class SilarWebServer {
     // porque el firmware es el unico que sabe por donde va; la base solo guarda
     // el total de la receta.
     this.currentCycle = null;
+    // Si la receta en curso pidió volver a home al completarse. Se toma de
+    // recipes.return_home_at_end al arrancar y solo se usa cuando la corrida
+    // termina sola: un STOP o un paro de emergencia no mueven nada más, porque
+    // ahí el operador está interviniendo la máquina.
+    this.regresarAHomeAlTerminar = false;
     // Reconciliación del estado del proceso contra la placa. El Arduino manda
     // ProcessActive/ProcessPaused en cada STATUS (cada 500 ms) y esa es la
     // verdad: los mensajes sueltos (PROCESO_PAUSADO, PROCESO_COMPLETADO) se
@@ -434,9 +439,11 @@ class SilarWebServer {
           this.currentStage = null;
           this.currentCycle = null;
           this.markProcessState('completed');
+          this.regresarAHomeSiLaRecetaLoPidio();
         } else if (parsed.raw.startsWith('PROCESO_DETENIDO') || parsed.raw.startsWith('PROCESO_ABORTADO')) {
           this.currentStage = null;
           this.currentCycle = null;
+          this.regresarAHomeAlTerminar = false;
           this.markProcessState('cancelled', 'Detenido por Arduino');
         } else if (parsed.raw.startsWith('PROCESO_PAUSADO')) {
           this.markProcessState('paused');
@@ -455,6 +462,7 @@ class SilarWebServer {
       if (parsed.type === 'emergency' && parsed.active) {
         this.currentStage = null;
         this.currentCycle = null;
+        this.regresarAHomeAlTerminar = false;
         this.io.emit('process-stage', null);
         this.io.emit('process-cycle', null);
         this.markProcessState('cancelled', 'Paro de emergencia');
@@ -536,6 +544,44 @@ class SilarWebServer {
   }
 
   /**
+   * Manda los ejes a home cuando la receta que acaba de completarse lo pidió
+   * (recipes.return_home_at_end).
+   *
+   * Solo se llama desde PROCESO_COMPLETADO: si el operador detuvo el proceso o
+   * saltó el paro de emergencia, la máquina se queda quieta. Mover los ejes
+   * justo después de una intervención manual es la peor forma de sorprender a
+   * quien tiene las manos dentro del equipo.
+   *
+   * No se espera al resultado en el manejador del puerto serie: el HOME tarda
+   * lo que tarde y el resto de los mensajes de la placa tienen que seguir
+   * procesándose mientras tanto.
+   */
+  regresarAHomeSiLaRecetaLoPidio() {
+    if (!this.regresarAHomeAlTerminar) return;
+
+    // Se apaga antes de lanzarlo para que no se repita si llegan dos
+    // PROCESO_COMPLETADO seguidos.
+    this.regresarAHomeAlTerminar = false;
+
+    logger.info('Receta completada: la receta pide regresar a home, ejecutando HOME');
+    this.io.emit('arduino-data', {
+      type: 'message',
+      raw: 'Receta completada: regresando a home'
+    });
+
+    this.arduinoController.executeHome()
+      .then(() => logger.info('HOME automático de fin de receta completado'))
+      .catch((error) => {
+        // Que falle el home no invalida la corrida, que ya terminó bien.
+        logger.error('No se pudo ejecutar el HOME automático de fin de receta', { error: error.message });
+        this.io.emit('arduino-data', {
+          type: 'message',
+          raw: `No se pudo regresar a home automaticamente: ${error.message}`
+        });
+      });
+  }
+
+  /**
    * Ajusta el estado guardado al que reporta la placa en cada STATUS.
    *
    * Antes el estado se llevaba solo con los mensajes sueltos que manda el
@@ -590,6 +636,7 @@ class SilarWebServer {
 
     this.currentStage = null;
     this.currentCycle = null;
+    this.regresarAHomeAlTerminar = false;
     this.io.emit('process-stage', null);
     this.io.emit('process-cycle', null);
     await this.markProcessState('cancelled', 'La placa dejó de reportar el proceso');
@@ -1210,13 +1257,14 @@ class SilarWebServer {
       try {
         // Insertar receta
         const [result] = await this.dbConnection.execute(
-          'INSERT INTO recipes (name, description, type, created_by_user_id, is_staged, created_at) VALUES (?, ?, ?, ?, ?, NOW())',
+          'INSERT INTO recipes (name, description, type, created_by_user_id, is_staged, return_home_at_end, created_at) VALUES (?, ?, ?, ?, ?, ?, NOW())',
           [
             name,
             description || 'Receta creada por usuario',
             type || 'A',
             req.user.id,
-            esPorEtapas ? 1 : 0
+            esPorEtapas ? 1 : 0,
+            req.body.returnHomeAtEnd ? 1 : 0
           ]
         );
 
@@ -1382,12 +1430,15 @@ class SilarWebServer {
       try {
         // Actualizar la receta
         await this.dbConnection.execute(
-          'UPDATE recipes SET name = ?, description = ?, type = ?, is_staged = ?, updated_at = NOW() WHERE id = ?',
+          'UPDATE recipes SET name = ?, description = ?, type = ?, is_staged = ?, return_home_at_end = ?, updated_at = NOW() WHERE id = ?',
           [
             name,
             description || recipe.description,
             type || recipe.type,
             esPorEtapas ? 1 : 0,
+            // Es un checkbox: si no viene marcado hay que apagarlo, así que no
+            // vale el `|| recipe.…` que usan los campos de texto de arriba.
+            req.body.returnHomeAtEnd ? 1 : 0,
             recipeId
           ]
         );
@@ -2265,6 +2316,12 @@ class SilarWebServer {
         parameters.stages = etapas;
       }
 
+      // Se queda registrado en processes.parameters junto con el resto, así que
+      // la corrida guarda con qué ajuste se lanzó aunque la receta se edite
+      // después. La copia en memoria es la que se consulta al completar.
+      parameters.returnHomeAtEnd = !!recipe.return_home_at_end;
+      this.regresarAHomeAlTerminar = !!recipe.return_home_at_end;
+
       // Verificar conexión con Arduino antes de iniciar proceso
       if (!this.arduinoController.isConnected) {
         logger.warn('Arduino no conectado al intentar iniciar proceso', { recipeId: validRecipeId });
@@ -2554,6 +2611,9 @@ class SilarWebServer {
       const durationMinutes = startTime
         ? Math.floor((endTime - new Date(startTime)) / 60000)
         : 0;
+
+      // Paro a mano: la receta no se completó, así que no hay home automático.
+      this.regresarAHomeAlTerminar = false;
 
       // Si Arduino está conectado, enviar comando de paro
       if (this.arduinoController.isConnected) {

@@ -72,6 +72,21 @@ function createWindow() {
     autoHideMenuBar: !isDev
   });
 
+  // En kiosko la ventana tapa la pantalla entera, asi que cualquier ventana que
+  // Windows abra encima (un aviso del sistema, un dialogo de otro programa) se
+  // lleva el foco del teclado y se queda detras, donde no se ve. Al volver a la
+  // app la ventana recupera el foco del sistema pero el contenido web no: la
+  // pantalla se ve normal, se puede hacer clic, y sin embargo lo que se escribe
+  // no llega a ningun input, porque las teclas las sigue esperando la ventana
+  // de atras.
+  //
+  // Devolverle el foco al webContents a mano es lo que rompe ese estado. Va en
+  // el evento y no una sola vez al arrancar porque la situacion se repite cada
+  // vez que algo aparece encima.
+  mainWindow.on('focus', () => {
+    if (mainWindow) mainWindow.webContents.focus();
+  });
+
   // Manejar el cierre de la ventana
   mainWindow.on('closed', () => {
     mainWindow = null;

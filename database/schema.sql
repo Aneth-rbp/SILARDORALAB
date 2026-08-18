@@ -43,6 +43,9 @@ CREATE TABLE IF NOT EXISTS recipes (
     created_by_user_id INT DEFAULT 1,
     is_active BOOLEAN DEFAULT true,
     is_staged BOOLEAN DEFAULT false COMMENT 'true = receta por etapas: su secuencia vive en recipe_stages',
+    -- Bandera de la receta entera, no de cada etapa: aplica cuando termina la
+    -- última. Vale igual para una receta normal y para una por etapas.
+    return_home_at_end BOOLEAN DEFAULT false COMMENT 'Ejecutar HOME automáticamente al completar la receta',
     
     INDEX idx_name (name),
     INDEX idx_type (type),
@@ -318,37 +321,87 @@ INSERT INTO system_config (config_key, config_value, config_type, description, c
 ON DUPLICATE KEY UPDATE config_value = VALUES(config_value);
 
 -- =====================================================
--- Insertar Usuarios de Ejemplo
+-- Datos de arranque: usuarios
 -- =====================================================
-INSERT INTO users (username, password, full_name, role) VALUES
-('admin', MD5('admin123'), 'Administrador del Sistema', 'admin'),
-('dr.martinez', MD5('password123'), 'Dr. Juan Martínez', 'usuario'),
-('dr.garcia', MD5('password123'), 'Dr. María García', 'usuario'),
-('operador1', MD5('password123'), 'Operador Principal', 'usuario')
-ON DUPLICATE KEY UPDATE full_name = VALUES(full_name);
+-- Solo dos: el administrador y una cuenta de operador. Los ids van explícitos
+-- para que las recetas de abajo puedan apuntar a ellos sin adivinar.
+--
+-- El ON DUPLICATE no toca `password` a propósito: si este archivo se vuelve a
+-- correr sobre una base que ya está en uso, no se le resetea la contraseña a
+-- nadie. Las de aquí son solo para el primer arranque; cámbialas en el equipo
+-- del laboratorio.
+INSERT INTO users (id, username, password, full_name, role) VALUES
+(1, 'admin', MD5('admin123'), 'Administrador del Sistema', 'admin'),
+(2, 'aneth', MD5('aneth123'), 'Aneth', 'usuario')
+ON DUPLICATE KEY UPDATE
+    username = VALUES(username),
+    full_name = VALUES(full_name),
+    role = VALUES(role);
 
 -- =====================================================
--- Insertar Recetas de Ejemplo
+-- Datos de arranque: recetas de ejemplo
 -- =====================================================
-INSERT INTO recipes (name, description, type, created_by_user_id) VALUES
-('Receta Estándar A', 'Proceso estándar para materiales tipo A', 'A', 1),
-('Receta Rápida B', 'Proceso rápido para materiales tipo B', 'B', 2),
-('Receta Lenta C', 'Proceso lento y controlado para materiales sensibles', 'C', 3),
-('Receta Experimental D', 'Receta para pruebas y desarrollo', 'D', 1)
-ON DUPLICATE KEY UPDATE name = VALUES(name);
+-- Dos recetas, una de cada tipo, con valores de un SILAR real y no de relleno:
+-- precursor - enjuague - precursor - enjuague en los cuatro vasos.
+--
+-- Los ids van explícitos porque recipe_parameters y recipe_stages tienen que
+-- apuntar a ellos. Volver a correr este archivo reescribe las recetas 1 y 2:
+-- son de ejemplo y este archivo es su dueño. Lo que cree el operador entra con
+-- id 3 en adelante y no se toca.
+INSERT INTO recipes (id, name, description, type, created_by_user_id, is_staged, return_home_at_end) VALUES
+(1, 'SILAR estándar (20 ciclos)',
+    'Receta normal de referencia: 20 s en precursor, 10 s de enjuague, en los cuatro vasos. Al terminar regresa a home.',
+    'A', 1, false, true),
+(2, 'SILAR por etapas: nucleación y crecimiento',
+    'Receta por etapas: primero 10 ciclos cortos y rápidos para nuclear, luego 30 ciclos largos con emersión lenta y ventilador para crecer la película.',
+    'B', 2, true, false)
+ON DUPLICATE KEY UPDATE
+    name = VALUES(name),
+    description = VALUES(description),
+    type = VALUES(type),
+    created_by_user_id = VALUES(created_by_user_id),
+    is_staged = VALUES(is_staged),
+    return_home_at_end = VALUES(return_home_at_end),
+    is_active = true,
+    deleted_at = NULL;
 
 -- =====================================================
--- Insertar Parámetros de Recetas de Ejemplo
+-- Datos de arranque: parámetros de las recetas
 -- =====================================================
+-- La receta 1 es normal, así que esta es su configuración de verdad.
+--
+-- La receta 2 es por etapas y esta fila es su resumen, con la misma forma que
+-- calcula buildStagedSummary() en el servidor: duración y ciclos son la suma de
+-- las etapas (10+75 min, 10+30 ciclos) y el resto se copia de la primera, que
+-- es con lo que arranca la corrida. Sin esta fila la receta saldría con la
+-- duración y los ciclos vacíos en el listado, en v_recipes_with_parameters y en
+-- el historial de procesos, que leen todos de aquí.
+--
+-- velocity_* y accel_* van en 0 porque el formulario no los pide: las
+-- velocidades que se usan son dip_speed, emersion_speed y transfer_speed. Poner
+-- números ahí haría que el ejemplo no se pareciera a lo que guarda la
+-- aplicación.
+--
+-- duration está en minutos y sale de la misma fórmula que el formulario:
+-- (esperas + 3 transferencias + 4 inmersiones de bajada y subida) x ciclos.
 INSERT INTO recipe_parameters (recipe_id, duration, temperature, velocity_x, velocity_y, accel_x, accel_y, humidity_offset, temperature_offset,
     dipping_wait0, dipping_wait1, dipping_wait2, dipping_wait3, transfer_wait,
     cycles, fan, except_dripping1, except_dripping2, except_dripping3, except_dripping4,
-    dip_start_position, dipping_length, transfer_speed, dip_speed) VALUES
-(1, 60, 25.0, 100.0, 100.0, 10.0, 10.0, 0.0, 0.0, 5000, 5000, 5000, 5000, 2000, 10, false, false, false, false, false, 0.0, 50.0, 10.0, 5.0),
-(2, 30, 30.0, 150.0, 150.0, 15.0, 15.0, 2.0, 1.0, 3000, 3000, 3000, 3000, 1500, 5, true, false, false, false, false, 0.0, 40.0, 15.0, 7.0),
-(3, 120, 20.0, 50.0, 50.0, 5.0, 5.0, -1.0, -0.5, 10000, 10000, 10000, 10000, 3000, 20, false, true, false, false, false, 0.0, 60.0, 5.0, 3.0),
-(4, 90, 28.0, 120.0, 80.0, 12.0, 8.0, 1.5, 0.5, 7000, 7000, 7000, 7000, 2500, 15, true, false, true, false, false, 0.0, 45.0, 12.0, 6.0)
-ON DUPLICATE KEY UPDATE 
+    dip_start_position, dipping_length, transfer_speed, dip_speed, emersion_speed,
+    pos_y1, pos_y2, pos_y3, pos_y4) VALUES
+-- Receta 1: 103 s por ciclo x 20 ciclos = 34.3 min -> 35
+(1, 35, 25.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+    20000, 10000, 20000, 10000, 1000,
+    20, false, false, false, false, false,
+    0.0, 50.0, 20.0, 10.0, 10.0,
+    0.0, 0.0, 0.0, 0.0),
+-- Receta 2: resumen de sus dos etapas (10+75 min, 10+30 ciclos)
+(2, 85, 25.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+    10000, 5000, 10000, 5000, 1000,
+    40, false, false, false, false, false,
+    0.0, 50.0, 20.0, 15.0, 15.0,
+    0.0, 0.0, 0.0, 0.0)
+ON DUPLICATE KEY UPDATE
     duration = VALUES(duration),
     temperature = VALUES(temperature),
     velocity_x = VALUES(velocity_x),
@@ -371,7 +424,72 @@ ON DUPLICATE KEY UPDATE
     dip_start_position = VALUES(dip_start_position),
     dipping_length = VALUES(dipping_length),
     transfer_speed = VALUES(transfer_speed),
-    dip_speed = VALUES(dip_speed);
+    dip_speed = VALUES(dip_speed),
+    emersion_speed = VALUES(emersion_speed),
+    pos_y1 = VALUES(pos_y1),
+    pos_y2 = VALUES(pos_y2),
+    pos_y3 = VALUES(pos_y3),
+    pos_y4 = VALUES(pos_y4);
+
+-- =====================================================
+-- Datos de arranque: etapas de la receta 2
+-- =====================================================
+-- Se ejecutan seguidas en una sola corrida, sin home ni pausa entre una y otra.
+-- El home solo se hace al final, y solo si la receta lo pide
+-- (recipes.return_home_at_end), que en esta está apagado.
+--
+-- La diferencia entre las dos etapas es la que se busca en un SILAR: la
+-- nucleación quiere muchos ciclos cortos y rápidos para sembrar la superficie,
+-- y el crecimiento quiere inmersiones largas con emersión lenta (5 mm/s contra
+-- los 8 mm/s de bajada) para arrastrar más solución y engrosar la película.
+INSERT INTO recipe_stages (recipe_id, stage_order, name, duration, temperature, velocity_x, velocity_y, accel_x, accel_y,
+    humidity_offset, temperature_offset,
+    dipping_wait0, dipping_wait1, dipping_wait2, dipping_wait3, transfer_wait,
+    cycles, fan, except_dripping1, except_dripping2, except_dripping3, except_dripping4,
+    dip_start_position, dipping_length, transfer_speed, dip_speed, emersion_speed,
+    pos_y1, pos_y2, pos_y3, pos_y4) VALUES
+-- Nucleación: 59.7 s por ciclo x 10 ciclos = 9.9 min -> 10
+(2, 1, 'Nucleación', 10, 25.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+    10000, 5000, 10000, 5000, 1000,
+    10, false, false, false, false, false,
+    0.0, 50.0, 20.0, 15.0, 15.0,
+    0.0, 0.0, 0.0, 0.0),
+-- Crecimiento: 149.5 s por ciclo x 30 ciclos = 74.8 min -> 75
+(2, 2, 'Crecimiento', 75, 25.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+    30000, 10000, 30000, 10000, 1500,
+    30, true, false, false, false, false,
+    0.0, 50.0, 15.0, 8.0, 5.0,
+    0.0, 0.0, 0.0, 0.0)
+ON DUPLICATE KEY UPDATE
+    name = VALUES(name),
+    duration = VALUES(duration),
+    temperature = VALUES(temperature),
+    velocity_x = VALUES(velocity_x),
+    velocity_y = VALUES(velocity_y),
+    accel_x = VALUES(accel_x),
+    accel_y = VALUES(accel_y),
+    humidity_offset = VALUES(humidity_offset),
+    temperature_offset = VALUES(temperature_offset),
+    dipping_wait0 = VALUES(dipping_wait0),
+    dipping_wait1 = VALUES(dipping_wait1),
+    dipping_wait2 = VALUES(dipping_wait2),
+    dipping_wait3 = VALUES(dipping_wait3),
+    transfer_wait = VALUES(transfer_wait),
+    cycles = VALUES(cycles),
+    fan = VALUES(fan),
+    except_dripping1 = VALUES(except_dripping1),
+    except_dripping2 = VALUES(except_dripping2),
+    except_dripping3 = VALUES(except_dripping3),
+    except_dripping4 = VALUES(except_dripping4),
+    dip_start_position = VALUES(dip_start_position),
+    dipping_length = VALUES(dipping_length),
+    transfer_speed = VALUES(transfer_speed),
+    dip_speed = VALUES(dip_speed),
+    emersion_speed = VALUES(emersion_speed),
+    pos_y1 = VALUES(pos_y1),
+    pos_y2 = VALUES(pos_y2),
+    pos_y3 = VALUES(pos_y3),
+    pos_y4 = VALUES(pos_y4);
 
 -- =====================================================
 -- Crear Vistas para Consultas Comunes

@@ -230,7 +230,7 @@ class RecipesScreen {
         
         recipeCards.forEach(card => {
             const recipeName = card.querySelector('.recipe-name-main')?.textContent.toLowerCase() || '';
-            const recipeDescription = card.querySelector('.recipe-description')?.textContent.toLowerCase() || '';
+            const recipeDescription = (card.dataset.descripcion || '').toLowerCase();
             const creatorName = card.querySelector('.creator-info span')?.textContent.toLowerCase() || '';
             
             const matches = recipeName.includes(searchLower) || 
@@ -344,6 +344,9 @@ class RecipesScreen {
             const card = document.createElement('div');
             card.className = `recipe-card compact ${isSelected ? 'selected' : ''}`;
             card.setAttribute('data-recipe-id', recipe.id);
+            // La descripcion ya no se pinta en la tarjeta (se lee en la ficha de
+            // la derecha), pero el buscador sigue mirandola: viaja en el dataset.
+            card.dataset.descripcion = recipe.description || '';
             
             card.innerHTML = `
                 <div class="recipe-header">
@@ -351,14 +354,9 @@ class RecipesScreen {
                     <span class="badge bg-info recipe-stage-badge"></span>
                     <div class="recipe-type-badge"></div>
                 </div>
-                <div class="recipe-description"></div>
                 <div class="recipe-meta-info">
                     <div class="creator-info">
                         <i class="bi bi-person-circle"></i>
-                        <span></span>
-                    </div>
-                    <div class="date-info">
-                        <i class="bi bi-calendar"></i>
                         <span></span>
                     </div>
                 </div>
@@ -367,9 +365,7 @@ class RecipesScreen {
             // Usar textContent para preservar UTF-8 correctamente
             card.querySelector('.recipe-name-main').textContent = recipe.name || '';
             card.querySelector('.recipe-type-badge').textContent = recipe.type || 'A';
-            card.querySelector('.recipe-description').textContent = recipe.description || 'Sin descripción';
             card.querySelector('.creator-info span').textContent = recipe.created_by_name || '';
-            card.querySelector('.date-info span').textContent = new Date(recipe.created_at).toLocaleDateString('es-ES');
 
             // Una receta por etapas se distingue en la lista: al ejecutarla corre
             // una secuencia entera, no un solo juego de parámetros.
@@ -406,7 +402,7 @@ class RecipesScreen {
         // Show/hide action bar
         const actionBar = document.getElementById('action-bar');
         if (actionBar) {
-            actionBar.style.display = this.selectedRecipe ? 'block' : 'none';
+            actionBar.style.display = this.selectedRecipe ? 'flex' : 'none';
         }
         
         // Enable action buttons
@@ -436,95 +432,77 @@ class RecipesScreen {
         const params = recipe.parameters || {};
         const etapas = Array.isArray(recipe.stages) ? recipe.stages : [];
 
-        // En una receta por etapas, los parámetros de arriba son el resumen
-        // (duración y ciclos totales, el resto de la primera etapa). Aquí solo
-        // se indica cuántas etapas hay; el desglose se ve al editar la receta.
-        const etapasHtml = recipe.is_staged && etapas.length > 0 ? `
-            <div class="stages-summary mt-3">
-                <h6 class="fw-bold text-primary mb-0">
-                    <i class="bi bi-list-ol me-2"></i>Etapas (${etapas.length})
-                </h6>
-            </div>` : '';
-        
-        // Debug: mostrar los parámetros en la consola
-        console.log('Receta seleccionada:', recipe.name);
-        console.log('Parámetros recibidos:', params);
-        console.log('Tipo de parámetros:', typeof params);
+        // En una receta por etapas, los parametros de arriba son el resumen
+        // (duracion y ciclos totales, el resto de la primera etapa). Aqui solo
+        // se indica cuantas etapas hay; el desglose se ve al editar la receta.
+        const numeroEtapas = etapas.length;
+
+        const inmersionesExcluidas = [
+            params.exceptDripping1 ? 'Y1' : '',
+            params.exceptDripping2 ? 'Y2' : '',
+            params.exceptDripping3 ? 'Y3' : '',
+            params.exceptDripping4 ? 'Y4' : ''
+        ].filter(Boolean).join(', ') || 'Ninguna';
+
+        // Los parametros se agrupan por lo que significan, no por el orden en
+        // que los guarda la receta: en el laboratorio se consultan de a bloques
+        // ("cuanto dura cada inmersion", "a que temperatura"). Cada grupo se
+        // dibuja como filas etiqueta/valor a dos columnas, que ocupan un tercio
+        // de lo que ocupaban las tarjetas y evitan tener que scrollear la ficha.
+        const grupos = [
+            {
+                titulo: 'Proceso',
+                filas: [
+                    [recipe.is_staged ? 'Duración total' : 'Duración', `${params.duration || '--'} min`],
+                    [recipe.is_staged ? 'Ciclos (total)' : 'Ciclos', `${params.cycles || '--'}`],
+                    recipe.is_staged ? ['Etapas', `${numeroEtapas || '--'}`] : null,
+                    ['Ventilador', params.fan ? 'Activado' : 'Desactivado'],
+                    ['Home al terminar', recipe.return_home_at_end ? 'Sí' : 'No']
+                ]
+            },
+            {
+                titulo: 'Tiempos',
+                filas: [
+                    ['Inmersión 1', `${params.dippingWait0 || '--'} ms`],
+                    ['Inmersión 2', `${params.dippingWait1 || '--'} ms`],
+                    ['Inmersión 3', `${params.dippingWait2 || '--'} ms`],
+                    ['Inmersión 4', `${params.dippingWait3 || '--'} ms`],
+                    ['Transferencia Y', `${params.transferWait || '--'} ms`],
+                    ['Excluir inmersiones', inmersionesExcluidas]
+                ]
+            },
+            {
+                titulo: 'Ambiente',
+                filas: [
+                    ['Temperatura', `${params.temperature || '--'} °C`],
+                    ['Offset temp.', `${params.temperatureOffset || '--'} °C`],
+                    ['Offset humedad', `${params.humidityOffset || '--'} %`]
+                ]
+            }
+        ];
+
+        const gruposHtml = grupos.map((grupo) => `
+            <h6 class="param-group-title">${grupo.titulo}</h6>
+            ${grupo.filas.filter(Boolean).map(([etiqueta, valor]) => `
+                <div class="param-row">
+                    <span class="param-label">${this.escapeHtml(etiqueta)}</span>
+                    <span class="param-value">${this.escapeHtml(String(valor))}</span>
+                </div>`).join('')}
+        `).join('');
 
         detailsContainer.innerHTML = `
             <div class="recipe-details-card">
-                <div class="details-header">
-                    <i class="bi bi-info-circle"></i>
-                    <h5>Detalles de la Receta</h5>
+                <div class="details-title">
+                    <span class="details-title-name">${this.escapeHtml(recipe.name)}</span>
+                    ${recipe.is_staged ? `<span class="details-title-badge">${numeroEtapas || ''} etapas</span>` : ''}
                 </div>
-                
-                <div class="details-content">
-                    <div class="recipe-name">
-                        ${this.escapeHtml(recipe.name)}
-                        ${recipe.is_staged ? '<span class="badge bg-info ms-2">Por etapas</span>' : ''}
-                    </div>
-                    
-                    <div class="params-grid">
-                        <div class="param-item">
-                            <span class="param-label">Duración ${recipe.is_staged ? 'total' : 'estimada'}</span>
-                            <span class="param-value">${params.duration || '--'} min</span>
-                        </div>
-                        <div class="param-item">
-                            <span class="param-label">Temperatura</span>
-                            <span class="param-value">${params.temperature || '--'} °C</span>
-                        </div>
-                        <div class="param-item">
-                            <span class="param-label">Offset Humedad</span>
-                            <span class="param-value">${params.humidityOffset || '--'} %</span>
-                        </div>
-                        <div class="param-item">
-                            <span class="param-label">Offset Temp.</span>
-                            <span class="param-value">${params.temperatureOffset || '--'} °C</span>
-                        </div>
-                        <!-- Tiempos de Inmersión -->
-                        <div class="param-item">
-                            <span class="param-label">Tiempo Inmersión 1</span>
-                            <span class="param-value">${params.dippingWait0 || '--'} ms</span>
-                        </div>
-                        <div class="param-item">
-                            <span class="param-label">Tiempo Inmersión 2</span>
-                            <span class="param-value">${params.dippingWait1 || '--'} ms</span>
-                        </div>
-                        <div class="param-item">
-                            <span class="param-label">Tiempo Inmersión 3</span>
-                            <span class="param-value">${params.dippingWait2 || '--'} ms</span>
-                        </div>
-                        <div class="param-item">
-                            <span class="param-label">Tiempo Inmersión 4</span>
-                            <span class="param-value">${params.dippingWait3 || '--'} ms</span>
-                        </div>
-                        <div class="param-item">
-                            <span class="param-label">Tiempo Transferencia Y</span>
-                            <span class="param-value">${params.transferWait || '--'} ms</span>
-                        </div>
-                        <!-- Parámetros de Proceso -->
-                        <div class="param-item">
-                            <span class="param-label">Ciclos${recipe.is_staged ? ' (total)' : ''}</span>
-                            <span class="param-value">${params.cycles || '--'}</span>
-                        </div>
-                        <div class="param-item">
-                            <span class="param-label">Ventilador</span>
-                            <span class="param-value">${params.fan ? 'Activado' : 'Desactivado'}</span>
-                        </div>
-                        <div class="param-item">
-                            <span class="param-label">Excluir Inmersiones</span>
-                            <span class="param-value">
-                                ${[
-                                    params.exceptDripping1 ? 'Y1' : '',
-                                    params.exceptDripping2 ? 'Y2' : '',
-                                    params.exceptDripping3 ? 'Y3' : '',
-                                    params.exceptDripping4 ? 'Y4' : ''
-                                ].filter(x => x).join(', ') || 'Ninguna'}
-                            </span>
-                        </div>
-                    </div>
 
-                    ${etapasHtml}
+                <div class="details-content">
+                    <p class="details-description">${this.escapeHtml(recipe.description || 'Sin descripción')}</p>
+
+                    <div class="params-grid">
+                        ${gruposHtml}
+                    </div>
                 </div>
             </div>
         `;
@@ -647,6 +625,9 @@ class RecipesScreen {
             form.querySelector('#recipe-name').value = recipe.name || '';
             form.querySelector('#recipe-type').value = recipe.type || 'A';
             form.querySelector('#recipe-description').value = recipe.description || '';
+            // Es columna de recipes, no de recipe_parameters: la lleva la receta,
+            // no el juego de parámetros de una etapa.
+            form.querySelector('#recipe-return-home').checked = !!recipe.return_home_at_end;
             form.querySelector('#recipe-duration').value = params.duration || '';
             form.querySelector('#recipe-temperature').value = params.temperature || '';
             form.querySelector('#recipe-humidity-offset').value = params.humidityOffset || '';
@@ -1392,6 +1373,7 @@ class RecipesScreen {
                 name: name,
                 type: formData.get('type') || 'A',
                 description: formData.get('description')?.trim() || '',
+                returnHomeAtEnd: formData.get('returnHomeAtEnd') === 'true',
                 isStaged: true,
                 stages: etapas
             });
@@ -1445,6 +1427,7 @@ class RecipesScreen {
             name: name,
             type: formData.get('type') || 'A',
             description: formData.get('description')?.trim() || '',
+            returnHomeAtEnd: formData.get('returnHomeAtEnd') === 'true',
             parameters: {
                 duration: parseInt(formData.get('duration')) || 0,
                 temperature: parseFloat(formData.get('temperature')) || 0,
@@ -1505,6 +1488,9 @@ class RecipesScreen {
         const datosLocales = {
             ...recipeData,
             is_staged: !!recipeData.isStaged,
+            // El backend la devuelve con el nombre de la columna; al reabrir el
+            // formulario sin recargar la lista se lee de aquí.
+            return_home_at_end: !!recipeData.returnHomeAtEnd,
             parameters: recipeData.parameters || this.stagedSummary(recipeData.stages)
         };
 
@@ -1813,37 +1799,41 @@ class RecipesScreen {
                         </div>
                     </div>
 
-                    <!-- Recipe Details Panel -->
-                    <div class="recipe-details-panel" id="recipe-details">
-                        <div class="details-placeholder">
-                            <div class="placeholder-icon">
-                                <i class="bi bi-info-circle"></i>
+                    <!--
+                        Panel de detalles. Los botones de accion viven aqui
+                        arriba y no en una barra al pie de la pantalla: en el
+                        monitor del laboratorio la barra caia fuera de la vista
+                        y habia que hacer scroll para ejecutar la receta que
+                        acababas de seleccionar. Solo iconos, grandes, para que
+                        se acierten de un dedazo.
+                    -->
+                    <div class="recipe-details-panel">
+                        <div class="details-actions" id="action-bar" style="display: none;">
+                            <button class="btn-action btn-execute" id="execute-recipe-btn" disabled
+                                    title="Ejecutar proceso" aria-label="Ejecutar proceso">
+                                <i class="bi bi-play-fill"></i>
+                            </button>
+                            <button class="btn-action btn-edit" id="edit-recipe-btn" disabled
+                                    title="Editar receta" aria-label="Editar receta">
+                                <i class="bi bi-pencil"></i>
+                            </button>
+                            <button class="btn-action btn-delete" id="delete-recipe-btn" disabled
+                                    title="Eliminar receta" aria-label="Eliminar receta">
+                                <i class="bi bi-trash"></i>
+                            </button>
+                        </div>
+
+                        <div class="recipe-details-body" id="recipe-details">
+                            <div class="details-placeholder">
+                                <div class="placeholder-icon">
+                                    <i class="bi bi-info-circle"></i>
+                                </div>
+                                <h5>Seleccione una receta</h5>
+                                <p>Los detalles se mostrarán aquí</p>
                             </div>
-                            <h5>Seleccione una receta</h5>
-                            <p>Los detalles se mostrarán aquí</p>
                         </div>
                     </div>
                 </div>
-
-                <!-- Action Bar -->
-                <div class="action-bar" id="action-bar" style="display: none;">
-                    <div class="action-buttons">
-                        <button class="btn-action btn-secondary" id="execute-recipe-btn" disabled>
-                            <i class="bi bi-play-fill"></i>
-                            <span>Ejecutar Proceso</span>
-                        </button>
-                        <button class="btn-action btn-secondary" id="edit-recipe-btn" disabled>
-                            <i class="bi bi-pencil"></i>
-                            <span>Editar Receta</span>
-                        </button>
-                        <button class="btn-action btn-secondary" id="delete-recipe-btn" disabled>
-                            <i class="bi bi-trash"></i>
-                            <span>Eliminar Receta</span>
-                        </button>
-                    </div>
-                </div>
-
-
             </div>
 
             <!-- Recipe Form Modal -->
@@ -1884,6 +1874,24 @@ class RecipesScreen {
                                     <div class="col-12">
                                         <label class="form-label">Descripción</label>
                                         <textarea class="form-control" name="description" id="recipe-description" rows="2"></textarea>
+                                    </div>
+                                    <!--
+                                        Va aquí, fuera de #recipe-single-params, para que se vea
+                                        igual en receta normal y en receta por etapas: es de la
+                                        receta entera, y en una receta por etapas se ejecuta al
+                                        acabar la última etapa, no entre una y otra.
+                                    -->
+                                    <div class="col-12">
+                                        <div class="form-check">
+                                            <input class="form-check-input" type="checkbox" name="returnHomeAtEnd" id="recipe-return-home" value="true">
+                                            <label class="form-check-label" for="recipe-return-home">
+                                                Regresar a home al terminar la ejecución
+                                            </label>
+                                            <div class="form-text">
+                                                Al completarse la receta, los ejes vuelven solos a su posición de home.
+                                                No se aplica si detienes el proceso a mano o si salta el paro de emergencia.
+                                            </div>
+                                        </div>
                                     </div>
 
                                     <!-- Parámetros de una receta normal. En una receta por etapas
