@@ -9,7 +9,8 @@
  * instalador ya instalado, así que un cambio de puro JS pesa unos pocos MB.
  */
 
-const { app, dialog } = require('electron');
+const { app } = require('electron');
+const { mostrarDialogo } = require('./foco-ventana');
 const { autoUpdater } = require('electron-updater');
 const fs = require('fs');
 const path = require('path');
@@ -130,7 +131,7 @@ async function promptInstall() {
   }
 
   const window = deps.getWindow();
-  const result = await dialog.showMessageBox(window, {
+  const result = await mostrarDialogo(window, {
     type: 'info',
     title: 'Actualización disponible',
     message: `SILAR System ${pendingUpdate.version} está listo para instalarse.`,
@@ -155,7 +156,7 @@ function setupEvents() {
   autoUpdater.on('update-available', (info) => {
     log('info', `Actualización encontrada: ${info.version} (instalada: ${app.getVersion()})`);
     if (manualCheck) {
-      dialog.showMessageBox(deps.getWindow(), {
+      mostrarDialogo(deps.getWindow(), {
         type: 'info',
         title: 'Actualización disponible',
         message: `Se encontró la versión ${info.version}.`,
@@ -169,7 +170,7 @@ function setupEvents() {
   autoUpdater.on('update-not-available', () => {
     log('info', `No hay actualizaciones (versión instalada: ${app.getVersion()})`);
     if (manualCheck) {
-      dialog.showMessageBox(deps.getWindow(), {
+      mostrarDialogo(deps.getWindow(), {
         type: 'info',
         title: 'Sin actualizaciones',
         message: `SILAR System ${app.getVersion()} ya está actualizado.`,
@@ -193,7 +194,7 @@ function setupEvents() {
     // Un fallo de red no debe estorbar: la app sigue funcionando sin actualizar
     log('error', `Error en la actualización: ${describe(error)}`);
     if (manualCheck) {
-      dialog.showMessageBox(deps.getWindow(), {
+      mostrarDialogo(deps.getWindow(), {
         type: 'error',
         title: 'Error buscando actualizaciones',
         message: 'No se pudo consultar el servidor de actualizaciones.',
@@ -216,7 +217,7 @@ function checkForUpdates(manual = false) {
   if (!app.isPackaged) {
     log('info', 'Modo desarrollo: actualizaciones deshabilitadas');
     if (manual) {
-      dialog.showMessageBox(deps.getWindow(), {
+      mostrarDialogo(deps.getWindow(), {
         type: 'info',
         title: 'Actualizaciones',
         message: 'Las actualizaciones automáticas solo funcionan en la versión instalada.',

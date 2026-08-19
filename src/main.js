@@ -3,10 +3,11 @@
  * Maneja la ventana principal y la comunicación con el servidor web
  */
 
-const { app, BrowserWindow, Menu, ipcMain, dialog } = require('electron');
+const { app, BrowserWindow, Menu, ipcMain } = require('electron');
 const path = require('path');
 const { spawn } = require('child_process');
 const { initUpdater, checkForUpdates } = require('./updater');
+const { devolverFocoAlContenido, mostrarDialogo } = require('./foco-ventana');
 const isDev = process.argv.includes('--dev');
 
 // Habilitar soporte para teclado virtual en pantallas táctiles de Windows
@@ -188,7 +189,7 @@ function showServerError() {
   if (errorDialogShowing) return;
   errorDialogShowing = true;
 
-  dialog.showMessageBox(mainWindow, {
+  mostrarDialogo(mainWindow, {
     type: 'warning',
     title: 'Servidor No Disponible',
     message: 'El servidor de fondo de SILAR System no pudo iniciarse correctamente.',
@@ -403,7 +404,7 @@ function createMenu() {
         {
           label: 'Acerca de SILAR System',
           click: () => {
-            dialog.showMessageBox(mainWindow, {
+            mostrarDialogo(mainWindow, {
               type: 'info',
               title: 'Acerca de SILAR System',
               message: `${appConfig.name} v${appConfig.version}`,
@@ -482,13 +483,7 @@ ipcMain.handle('check-server', async () => {
 // aplicacion se ve normal y responde al raton, y sin embargo no se puede
 // escribir en ningun campo. La pagina no puede arreglarlo por si sola, asi que
 // lo pide por aqui; ver public/js/foco-dialogos.js.
-ipcMain.handle('restaurar-foco-ventana', () => {
-  if (!mainWindow || mainWindow.isDestroyed()) return false;
-
-  mainWindow.focus();
-  mainWindow.webContents.focus();
-  return true;
-});
+ipcMain.handle('restaurar-foco-ventana', () => devolverFocoAlContenido(mainWindow));
 
 // Prevenir múltiples instancias
 const gotTheLock = app.requestSingleInstanceLock();
