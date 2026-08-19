@@ -3541,6 +3541,28 @@ body:not(.login-page) {
     color: #6c757d;
 }
 
+/* Los estados sin tarjetas -vacio, cargando y "sin resultados"- son hijos
+   directos de la rejilla de recetas, asi que caian dentro de una sola columna
+   de ~230px: el texto se apilaba, el bloque crecia mas que el alto visible y el
+   boton de "Nueva Receta" quedaba cortado por abajo. Ocupan la fila entera. */
+.recipes-grid > .empty-state,
+.recipes-grid > .loading-state {
+    grid-column: 1 / -1;
+    /* El 4rem original hacia que el bloque no cupiera de alto en la pantalla
+       del laboratorio y volvia a cortarse el boton. */
+    padding: 1rem;
+}
+
+/* Cuando el mensaje es lo unico que hay, se centra en el hueco en vez de
+   quedarse pegado arriba. */
+.recipes-grid:has(> .empty-state:only-child),
+.recipes-grid:has(> .loading-state:only-child) {
+    /* "safe": si la pantalla es tan baja que el mensaje no cabe, vuelve a
+       alinearse arriba. Centrado a secas se desborda por los dos lados y la
+       parte de arriba queda inalcanzable con el scroll. */
+    align-content: safe center;
+}
+
 .empty-icon {
     font-size: 4rem;
     color: #3498db;

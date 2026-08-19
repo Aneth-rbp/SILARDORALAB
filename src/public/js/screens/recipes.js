@@ -324,11 +324,15 @@ class RecipesScreen {
                     </div>
                     <h4>No hay recetas disponibles</h4>
                     <p>Cree su primera receta para comenzar</p>
-                    <button class="btn btn-primary" onclick="this.showRecipeForm()">
+                    <button class="btn btn-primary" id="empty-new-recipe-btn">
                         <i class="bi bi-plus-lg me-2"></i>Nueva Receta
                     </button>
                 </div>
             `;
+            // Con onclick en linea el `this` era el propio boton, no la
+            // pantalla, asi que no abria nada.
+            container.querySelector('#empty-new-recipe-btn')
+                ?.addEventListener('click', () => this.showRecipeForm());
             return;
         }
 
