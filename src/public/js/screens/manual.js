@@ -170,8 +170,14 @@ class ManualScreen {
         this.app.showInfo('Configurando modo AUTOMÁTICO...');
     }
 
-    executeHome() {
-        if (confirm('¿Ejecutar secuencia HOME? Los ejes se moverán a posición inicial.')) {
+    async executeHome() {
+        const ejecutar = await confirmar('¿Ejecutar secuencia HOME?\n\nLos ejes se moverán a posición inicial.', {
+            titulo: 'Secuencia HOME',
+            aceptar: 'Ejecutar',
+            tipo: 'aviso'
+        });
+
+        if (ejecutar) {
             this.app.socket.emit('arduino-command', {
                 command: 'HOME'
             });

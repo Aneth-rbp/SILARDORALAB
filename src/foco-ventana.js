@@ -49,16 +49,17 @@ function devolverFocoAlContenido(ventana) {
 /**
  * dialog.showMessageBox, pero recuperando el foco al cerrarse.
  *
- * Devuelve lo mismo que showMessageBox, así que se usa igual. Úsalo en vez de
- * llamar a dialog.showMessageBox directamente: cada diálogo que se escape de
- * aquí deja la app sin teclado.
+ * Devuelve lo mismo que showMessageBox, así que se usa igual. Es el último
+ * recurso: lo normal es llamar a mostrarDialogo() de src/dialogos.js, que
+ * pregunta dentro de la propia aplicación y solo cae aquí cuando la página no
+ * está en condiciones de contestar.
  *
  * @param {import('electron').BrowserWindow} ventana
  * @param {Electron.MessageBoxOptions} opciones
  */
-function mostrarDialogo(ventana, opciones) {
+function mostrarDialogoNativo(ventana, opciones) {
   return dialog.showMessageBox(ventana, opciones)
     .finally(() => devolverFocoAlContenido(ventana));
 }
 
-module.exports = { devolverFocoAlContenido, mostrarDialogo };
+module.exports = { devolverFocoAlContenido, mostrarDialogoNativo };

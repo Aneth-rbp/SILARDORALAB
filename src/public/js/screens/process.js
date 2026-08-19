@@ -251,7 +251,13 @@ class ProcessScreen {
     }
 
     async stopProcess() {
-        if (confirm('¿Está seguro que desea detener el proceso?')) {
+        const detener = await confirmar('¿Está seguro que desea detener el proceso?', {
+            titulo: 'Detener proceso',
+            aceptar: 'Detener',
+            tipo: 'peligro'
+        });
+
+        if (detener) {
             try {
                 const result = await this.app.apiCall('/process/stop', {
                     method: 'POST'

@@ -282,7 +282,13 @@ class UsersScreen {
     }
 
     async deleteUser(id, username) {
-        if (!confirm(`¿Está seguro que desea eliminar al usuario "${username}"?`)) return;
+        const eliminar = await confirmar(`¿Está seguro que desea eliminar al usuario "${username}"?`, {
+            titulo: 'Eliminar usuario',
+            aceptar: 'Eliminar',
+            tipo: 'peligro'
+        });
+
+        if (!eliminar) return;
 
         try {
             const response = await this.app.apiCall(`/users/${id}`, {

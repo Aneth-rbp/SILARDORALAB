@@ -213,7 +213,13 @@ class MonitoringScreen {
     }
 
     async emergencyStop() {
-        if (confirm('¿Está seguro que desea realizar una parada de emergencia?')) {
+        const parar = await confirmar('¿Está seguro que desea realizar una parada de emergencia?', {
+            titulo: 'Paro de emergencia',
+            aceptar: 'Parar ahora',
+            tipo: 'peligro'
+        });
+
+        if (parar) {
             try {
                 await this.app.apiCall('/process/emergency-stop', {
                     method: 'POST'

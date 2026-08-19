@@ -10,7 +10,7 @@
  */
 
 const { app } = require('electron');
-const { mostrarDialogo } = require('./foco-ventana');
+const { mostrarDialogo } = require('./dialogos');
 const { autoUpdater } = require('electron-updater');
 const fs = require('fs');
 const path = require('path');

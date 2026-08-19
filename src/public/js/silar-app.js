@@ -1257,8 +1257,14 @@ class SilarApp {
         }
     }
 
-    confirmExit() {
-        if (confirm('¿Está seguro que desea salir del sistema SILAR?')) {
+    async confirmExit() {
+        const salir = await confirmar('¿Está seguro que desea salir del sistema SILAR?', {
+            titulo: 'Salir del sistema',
+            aceptar: 'Salir',
+            tipo: 'peligro'
+        });
+
+        if (salir) {
             // En Electron, cerrar la aplicación
             if (window.require) {
                 const { remote } = window.require('electron');

@@ -7,7 +7,7 @@ const { app, BrowserWindow, Menu, ipcMain } = require('electron');
 const path = require('path');
 const { spawn } = require('child_process');
 const { initUpdater, checkForUpdates } = require('./updater');
-const { devolverFocoAlContenido, mostrarDialogo } = require('./foco-ventana');
+const { devolverFocoAlContenido, mostrarDialogo } = require('./dialogos');
 const isDev = process.argv.includes('--dev');
 
 // Habilitar soporte para teclado virtual en pantallas táctiles de Windows

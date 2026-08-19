@@ -208,9 +208,16 @@ class ConfigurationScreen {
         }
     }
 
-    resetConfiguration() {
+    async resetConfiguration() {
         if (!this.isAdmin) return;
-        if (confirm('¿Está seguro que desea restablecer los cambios?')) {
+
+        const restablecer = await confirmar('¿Está seguro que desea restablecer los cambios?', {
+            titulo: 'Restablecer cambios',
+            aceptar: 'Restablecer',
+            tipo: 'aviso'
+        });
+
+        if (restablecer) {
             this.loadConfiguration();
         }
     }
@@ -450,7 +457,13 @@ class ConfigurationScreen {
     async calZGuardar() {
         if (!this.isAdmin || this.calZ.ocupado) return;
 
-        if (!confirm('¿Guardar esta calibración en la memoria de la máquina?\n\nSustituye a la anterior y se usará en todas las recetas.')) {
+        const guardar = await confirmar('¿Guardar esta calibración en la memoria de la máquina?\n\nSustituye a la anterior y se usará en todas las recetas.', {
+            titulo: 'Guardar calibración',
+            aceptar: 'Guardar',
+            tipo: 'aviso'
+        });
+
+        if (!guardar) {
             return;
         }
 
@@ -473,7 +486,13 @@ class ConfigurationScreen {
     async calZRestaurarFabrica() {
         if (!this.isAdmin || this.calZ.ocupado) return;
 
-        if (!confirm('¿Restaurar la calibración de fábrica?\n\nSe pierde la calibración guardada actualmente.')) {
+        const restaurar = await confirmar('¿Restaurar la calibración de fábrica?\n\nSe pierde la calibración guardada actualmente.', {
+            titulo: 'Restaurar calibración de fábrica',
+            aceptar: 'Restaurar',
+            tipo: 'peligro'
+        });
+
+        if (!restaurar) {
             return;
         }
 
@@ -661,7 +680,13 @@ class ConfigurationScreen {
     async calYGuardar() {
         if (!this.isAdmin || this.calY.ocupado) return;
 
-        if (!confirm('¿Guardar esta geometría en la memoria de la máquina?\n\nSustituye a la anterior y se usará en todas las recetas.')) {
+        const guardar = await confirmar('¿Guardar esta geometría en la memoria de la máquina?\n\nSustituye a la anterior y se usará en todas las recetas.', {
+            titulo: 'Guardar geometría',
+            aceptar: 'Guardar',
+            tipo: 'aviso'
+        });
+
+        if (!guardar) {
             return;
         }
 
@@ -684,7 +709,13 @@ class ConfigurationScreen {
     async calYRestaurarFabrica() {
         if (!this.isAdmin || this.calY.ocupado) return;
 
-        if (!confirm('¿Restaurar la geometría de fábrica?\n\nVuelve a los vasos en 0 / 55 / 110 / 165 mm y se pierde la guardada actualmente.')) {
+        const restaurar = await confirmar('¿Restaurar la geometría de fábrica?\n\nVuelve a los vasos en 0 / 55 / 110 / 165 mm y se pierde la guardada actualmente.', {
+            titulo: 'Restaurar geometría de fábrica',
+            aceptar: 'Restaurar',
+            tipo: 'peligro'
+        });
+
+        if (!restaurar) {
             return;
         }
 

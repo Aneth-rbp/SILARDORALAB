@@ -192,6 +192,15 @@
          los usa. -->
     <script src="js/foco-dialogos.js"></script>
 
+    <!-- confirmar()/avisar(): los modales que sustituyen a confirm() y
+         alert(), para no abrir dialogos de Windows que dejan la pagina sin
+         foco de teclado. Va antes que las pantallas, que los usan. -->
+    <script src="js/confirmar.js"></script>
+
+    <!-- Muestra con esos mismos modales los avisos que manda el proceso
+         principal (el updater, sobre todo). Necesita confirmar.js. -->
+    <script src="js/puente-dialogos.js"></script>
+
     <!-- Screen Scripts (cargar primero) -->
     <script src="js/screens/dashboard.js"></script>
     <script src="js/screens/recipes.js"></script>

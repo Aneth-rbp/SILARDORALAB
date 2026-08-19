@@ -18,6 +18,15 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // hacerlo; ver js/foco-dialogos.js.
   restaurarFoco: () => ipcRenderer.invoke('restaurar-foco-ventana'),
 
+  // Puente para que los avisos del proceso principal -el updater, sobre todo-
+  // se pregunten con los modales de la aplicacion en vez de abrir una ventana
+  // de Windows. Ver js/puente-dialogos.js y src/dialogos.js.
+  alPedirDialogo: (manejador) => {
+    ipcRenderer.on('dialogo-app', (evento, datos) => manejador(datos));
+  },
+  acusarDialogo: (id) => ipcRenderer.send('dialogo-app-recibido', id),
+  responderDialogo: (id, indice) => ipcRenderer.send('dialogo-app-respuesta', id, indice),
+
   // Notificaciones del sistema
   showNotification: (title, body) => {
     if ('Notification' in window) {
