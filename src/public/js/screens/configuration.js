@@ -22,9 +22,16 @@ class ConfigurationScreen {
             ocupado: false
         };
 
-        // Estado de la geometría del eje Y: separación entre vasos y escala.
+        // Estado del asistente de geometría del eje Y.
+        // puntos: [{ pasos, distanciaMM }] medidos por el operador con la regla.
+        // vasos: posición capturada de cada vaso, en PASOS (null = sin capturar).
         this.calY = {
             calibracion: null,
+            tamanoPaso: 1000,
+            pasosActuales: 0,
+            puntos: [],
+            ajuste: null,
+            vasos: [null, null, null, null],
             ocupado: false
         };
 
@@ -77,9 +84,23 @@ class ConfigurationScreen {
             if (e.target.closest('#calz-verify-btn')) this.calZVerificar();
             if (e.target.closest('#calz-save-btn')) this.calZGuardar();
             if (e.target.closest('#calz-factory-btn')) this.calZRestaurarFabrica();
+
+            // --- Asistente de geometría del eje Y ---
+            if (e.target.closest('#caly-home-btn')) this.calYHome();
+            if (e.target.closest('#caly-fwd-btn')) this.calYMover(1);
+            if (e.target.closest('#caly-back-btn')) this.calYMover(-1);
+            if (e.target.closest('#caly-measure-btn')) this.calYRegistrarMedida();
+            if (e.target.closest('#caly-undo-btn')) this.calYDeshacerMedida();
             if (e.target.closest('#caly-apply-btn')) this.calYAplicar();
             if (e.target.closest('#caly-save-btn')) this.calYGuardar();
             if (e.target.closest('#caly-factory-btn')) this.calYRestaurarFabrica();
+
+            // Los cuatro vasos comparten manejador: el índice viaja en el
+            // data- del botón, que es lo único que los distingue.
+            const capturar = e.target.closest('[data-caly-capturar]');
+            if (capturar) this.calYCapturarVaso(Number(capturar.dataset.calyCapturar));
+            const ir = e.target.closest('[data-caly-ir]');
+            if (ir) this.calYIrAVaso(Number(ir.dataset.calyIr));
         };
 
         document.addEventListener('click', this.clickHandler);
@@ -145,10 +166,12 @@ class ConfigurationScreen {
         }
 
         // La calibración no se muestra en solo lectura: mueve el eje de verdad.
-        const calzContainer = document.getElementById('calz-container');
-        if (calzContainer && !this.isAdmin) {
-            calzContainer.classList.add('d-none');
-        }
+        ['calz-container', 'caly-container'].forEach((id) => {
+            const contenedor = document.getElementById(id);
+            if (contenedor && !this.isAdmin) {
+                contenedor.classList.add('d-none');
+            }
+        });
     }
 
     showReadOnlyMessage() {
@@ -329,23 +352,23 @@ class ConfigurationScreen {
         if (!this.isAdmin) return;
 
         const campo = document.getElementById('calz-measure-input');
-        const cm = parseFloat(campo?.value);
-        if (!Number.isFinite(cm) || cm <= 0) {
-            this.calZEstado('Escribe la altura medida en cm', 'warning');
+        const mm = parseFloat(campo?.value);
+        if (!Number.isFinite(mm) || mm <= 0) {
+            this.calZEstado('Escribe la altura medida en mm', 'warning');
             return;
         }
 
         const yaMedido = this.calZ.puntos.find(p => p.pasos === this.calZ.pasosAcumulados);
         if (yaMedido) {
-            yaMedido.alturaMM = cm * 10;
+            yaMedido.alturaMM = mm;
         } else {
-            this.calZ.puntos.push({ pasos: this.calZ.pasosAcumulados, alturaMM: cm * 10 });
+            this.calZ.puntos.push({ pasos: this.calZ.pasosAcumulados, alturaMM: mm });
             this.calZ.puntos.sort((a, b) => a.pasos - b.pasos);
         }
 
         if (campo) campo.value = '';
         this.calZ.ajuste = this.calZAjustar();
-        this.calZEstado(`Punto registrado: ${this.calZ.pasosAcumulados} pasos → ${cm.toFixed(1)} cm`, 'success');
+        this.calZEstado(`Punto registrado: ${this.calZ.pasosAcumulados} pasos → ${mm.toFixed(1)} mm`, 'success');
         this.renderZCalibration();
     }
 
@@ -432,21 +455,21 @@ class ConfigurationScreen {
     async calZVerificar() {
         if (!this.isAdmin || this.calZ.ocupado) return;
 
-        const cm = parseFloat(document.getElementById('calz-verify-height')?.value);
-        if (!Number.isFinite(cm) || cm <= 0) {
-            this.calZEstado('Escribe la altura de verificación en cm', 'warning');
+        const mm = parseFloat(document.getElementById('calz-verify-height')?.value);
+        if (!Number.isFinite(mm) || mm <= 0) {
+            this.calZEstado('Escribe la altura de verificación en mm', 'warning');
             return;
         }
 
-        this.calZOcupado(true, `Moviendo el eje a ${cm.toFixed(1)} cm...`);
+        this.calZOcupado(true, `Moviendo el eje a ${mm.toFixed(1)} mm...`);
         try {
             const respuesta = await this.calZApi('/goto', {
                 method: 'POST',
-                body: JSON.stringify({ heightMm: cm * 10 })
+                body: JSON.stringify({ heightMm: mm })
             });
             if (!respuesta.success) throw new Error(respuesta.message);
 
-            this.calZEstado(`Movimiento terminado. Mide con la regla: debe dar ${cm.toFixed(1)} cm exactos.`, 'info');
+            this.calZEstado(`Movimiento terminado. Mide con la regla: debe dar ${mm.toFixed(1)} mm exactos.`, 'info');
         } catch (error) {
             this.calZEstado(`Error moviendo el eje: ${error.message}`, 'danger');
         } finally {
@@ -520,8 +543,8 @@ class ConfigurationScreen {
             actual.innerHTML = cal
                 ? `
                     <div class="col-6 col-md-3"><span class="text-muted x-small d-block">Pasos por mm</span><strong>${cal.stepsPerMm.toFixed(3)}</strong></div>
-                    <div class="col-6 col-md-3"><span class="text-muted x-small d-block">Altura en home</span><strong>${(cal.homeHeightMm / 10).toFixed(1)} cm</strong></div>
-                    <div class="col-6 col-md-3"><span class="text-muted x-small d-block">Altura mínima</span><strong>${(cal.minHeightMm / 10).toFixed(1)} cm</strong></div>
+                    <div class="col-6 col-md-3"><span class="text-muted x-small d-block">Altura en home</span><strong>${cal.homeHeightMm.toFixed(1)} mm</strong></div>
+                    <div class="col-6 col-md-3"><span class="text-muted x-small d-block">Altura mínima</span><strong>${cal.minHeightMm.toFixed(1)} mm</strong></div>
                     <div class="col-6 col-md-3"><span class="text-muted x-small d-block">Fondo del eje</span><strong>${cal.floorSteps} pasos</strong></div>
                   `
                 : '<div class="col-12 text-muted small">Sin datos: conecta el Arduino para leer la calibración.</div>';
@@ -542,8 +565,8 @@ class ConfigurationScreen {
                     return `
                         <tr class="${fuera ? 'table-warning' : ''}">
                             <td>${p.pasos}</td>
-                            <td>${(p.alturaMM / 10).toFixed(1)} cm</td>
-                            <td class="${fuera ? 'fw-bold' : 'text-muted'}">${residuo === null ? '—' : `${residuo >= 0 ? '+' : ''}${residuo.toFixed(1)} mm`}</td>
+                            <td>${p.alturaMM.toFixed(1)} mm</td>
+                            <td class="${fuera ? 'fw-bold' : 'text-muted'}">${ConfigurationScreen.formatearResiduo(residuo)}</td>
                         </tr>
                     `;
                 }).join('');
@@ -564,7 +587,7 @@ class ConfigurationScreen {
                 resultado.innerHTML = `
                     <div class="row g-3">
                         <div class="col-6"><span class="text-muted x-small d-block">Pasos por mm calculados</span><strong class="fs-5">${ajuste.pasosPorMM.toFixed(3)}</strong></div>
-                        <div class="col-6"><span class="text-muted x-small d-block">Altura en home calculada</span><strong class="fs-5">${(ajuste.alturaHomeMM / 10).toFixed(1)} cm</strong></div>
+                        <div class="col-6"><span class="text-muted x-small d-block">Altura en home calculada</span><strong class="fs-5">${ajuste.alturaHomeMM.toFixed(1)} mm</strong></div>
                     </div>
                     ${aviso}
                 `;
@@ -578,19 +601,27 @@ class ConfigurationScreen {
     // =====================================================================
     // Geometría del eje Y
     //
-    // Dos valores independientes que antes estaban clavados en el firmware:
+    // Mismo asistente que el de Z, por el mismo motivo: medir a ojo dónde está
+    // el cero fue lo que descuadró la calibración de Z por 2 cm, y aquí el
+    // problema es idéntico. Así que la escala sale de las DIFERENCIAS entre
+    // lecturas -home, mover una cantidad conocida de pasos, medir con la regla,
+    // repetir- y no de acertar desde dónde mide la regla.
     //
-    //   - Posición de cada vaso: dónde para el eje para cada uno de los cuatro,
-    //     medido desde el home. Van una a una y no como una separación única
-    //     porque los vasos no tienen por qué estar igualmente espaciados; en
-    //     cuanto se reubica uno, una separación deja de describir el banco.
-    //   - Pasos por mm: la mecánica del eje. Solo se toca si se cambia la
+    // Lo que se calibra son dos cosas independientes:
+    //
+    //   - Pasos por mm: la mecánica del eje. Solo cambia si se toca la
     //     transmisión, y de ella depende que transferSpeed en mm/s signifique
     //     lo que dice (y cuál es la velocidad máxima del eje).
+    //   - Posición de cada vaso: dónde para el eje para cada uno de los cuatro.
+    //     No se miden con la regla: se mueve el eje hasta que el sustrato queda
+    //     centrado sobre el vaso y se captura la posición REAL que reporta el
+    //     firmware. Van una a una porque los vasos no tienen por qué estar
+    //     igualmente separados; en cuanto se reubica uno, una separación única
+    //     deja de describir el banco.
     //
-    // No hay asistente de medición como en Z: aquí basta con medir con la regla
-    // desde el home hasta el centro de cada vaso, porque el firmware ya sabe
-    // cuántos pasos por mm da el eje.
+    // Los vasos se guardan en PASOS, no en mm, y se convierten a mm solo al
+    // aplicar. Así, si además se recalcula la escala, los vasos siguen cayendo
+    // en el mismo sitio físico: no se han movido, solo se miden distinto.
     // =====================================================================
 
     async calYApi(ruta, opciones = {}) {
@@ -604,6 +635,7 @@ class ConfigurationScreen {
             const respuesta = await this.calYApi('');
             if (respuesta.success) {
                 this.calY.calibracion = respuesta.calibration;
+                this.calYSincronizarConMaquina();
             } else {
                 this.calY.calibracion = null;
                 this.calYEstado(respuesta.message || 'No se pudo leer la geometría', 'warning');
@@ -616,6 +648,24 @@ class ConfigurationScreen {
         this.renderYCalibration();
     }
 
+    /**
+     * Parte de lo que la máquina tiene cargado ahora mismo: la posición real
+     * del eje y los cuatro vasos ya convertidos a pasos por el firmware. Así se
+     * puede recalcular solo la escala, o recapturar solo un vaso, sin que el
+     * resto se quede en blanco.
+     */
+    calYSincronizarConMaquina() {
+        const cal = this.calY.calibracion;
+        if (!cal) return;
+
+        if (Number.isFinite(cal.currentSteps)) {
+            this.calY.pasosActuales = cal.currentSteps;
+        }
+        this.calY.vasos = this.calY.vasos.map((pasos, i) => (
+            pasos === null && Number.isFinite(cal.positions[i]) ? cal.positions[i] : pasos
+        ));
+    }
+
     calYEstado(mensaje, tipo = 'info') {
         const caja = document.getElementById('caly-status');
         if (!caja) return;
@@ -626,34 +676,233 @@ class ConfigurationScreen {
 
     calYOcupado(ocupado, mensaje) {
         this.calY.ocupado = ocupado;
-        ['caly-apply-btn', 'caly-save-btn', 'caly-factory-btn'].forEach((id) => {
-            const boton = document.getElementById(id);
-            if (boton) boton.disabled = ocupado;
+        ['caly-home-btn', 'caly-fwd-btn', 'caly-back-btn', 'caly-measure-btn',
+            'caly-apply-btn', 'caly-save-btn', 'caly-factory-btn'].forEach((id) => {
+                const boton = document.getElementById(id);
+                if (boton) boton.disabled = ocupado;
+            });
+        document.querySelectorAll('[data-caly-capturar], [data-caly-ir]').forEach((boton) => {
+            boton.disabled = ocupado;
         });
         if (ocupado && mensaje) this.calYEstado(mensaje, 'info');
+    }
+
+    async calYHome() {
+        if (!this.isAdmin || this.calY.ocupado) return;
+
+        this.calYOcupado(true, 'Ejecutando home... los ejes van hasta el final de carrera.');
+        try {
+            const respuesta = await this.calYApi('/home', { method: 'POST' });
+            if (!respuesta.success) throw new Error(respuesta.message);
+
+            // El home redefine el cero del eje, así que las medidas anteriores
+            // ya no pertenecen a la misma serie.
+            this.calY.pasosActuales = 0;
+            this.calY.puntos = [];
+            this.calY.ajuste = null;
+            this.calYEstado('Home completado. Mide desde el home hasta el sustrato y registra ese primer punto.', 'success');
+        } catch (error) {
+            this.calYEstado(`Error ejecutando home: ${error.message}`, 'danger');
+        } finally {
+            this.calYOcupado(false);
+            this.renderYCalibration();
+        }
+    }
+
+    /**
+     * signo = +1 aleja del home, -1 lo acerca. La posición no se acumula aquí:
+     * se toma la que devuelve el firmware, que es la única que sabe si el eje
+     * llegó o se paró antes contra un final de carrera.
+     */
+    async calYMover(signo) {
+        if (!this.isAdmin || this.calY.ocupado) return;
+
+        const tamano = parseInt(document.getElementById('caly-step-size')?.value, 10);
+        if (!Number.isInteger(tamano) || tamano <= 0) {
+            this.calYEstado('El tamaño de paso debe ser un entero positivo', 'warning');
+            return;
+        }
+        this.calY.tamanoPaso = tamano;
+
+        this.calYOcupado(true, `Moviendo ${signo > 0 ? '+' : '-'}${tamano} pasos...`);
+        try {
+            const respuesta = await this.calYApi('/jog', {
+                method: 'POST',
+                body: JSON.stringify({ steps: signo * tamano })
+            });
+            if (!respuesta.success) throw new Error(respuesta.message);
+
+            this.calY.pasosActuales = respuesta.result.currentSteps;
+            this.calYEstado(`Movimiento completado (${this.calY.pasosActuales} pasos desde home). Mide y registra.`, 'success');
+        } catch (error) {
+            this.calYEstado(`Error moviendo el eje: ${error.message}`, 'danger');
+        } finally {
+            this.calYOcupado(false);
+            this.renderYCalibration();
+        }
+    }
+
+    calYRegistrarMedida() {
+        if (!this.isAdmin) return;
+
+        const campo = document.getElementById('caly-measure-input');
+        const mm = parseFloat(campo?.value);
+        if (!Number.isFinite(mm)) {
+            this.calYEstado('Escribe la distancia medida en mm', 'warning');
+            return;
+        }
+
+        const yaMedido = this.calY.puntos.find(p => p.pasos === this.calY.pasosActuales);
+        if (yaMedido) {
+            yaMedido.distanciaMM = mm;
+        } else {
+            this.calY.puntos.push({ pasos: this.calY.pasosActuales, distanciaMM: mm });
+            this.calY.puntos.sort((a, b) => a.pasos - b.pasos);
+        }
+
+        if (campo) campo.value = '';
+        this.calY.ajuste = this.calYAjustar();
+        this.calYEstado(`Punto registrado: ${this.calY.pasosActuales} pasos → ${mm.toFixed(1)} mm`, 'success');
+        this.renderYCalibration();
+    }
+
+    calYDeshacerMedida() {
+        if (!this.calY.puntos.length) return;
+        this.calY.puntos.pop();
+        this.calY.ajuste = this.calYAjustar();
+        this.renderYCalibration();
+    }
+
+    /**
+     * Recta de mínimos cuadrados distancia = A + B·pasos, con los pasos
+     * contados desde el home. B sale positivo -alejarse del home aumenta la
+     * distancia- y su inverso es la escala:
+     *   pasos/mm = 1/B
+     * A es el desplazamiento del cero de la regla y no se usa para nada: ahí
+     * está justo la gracia del método, que ese error se queda fuera de B.
+     * Se devuelven también los residuos: si un punto se desvía milímetros del
+     * ajuste es que esa lectura está mal, y eso hay que verlo ANTES de aplicar.
+     */
+    calYAjustar() {
+        const puntos = this.calY.puntos;
+        if (puntos.length < 2) return null;
+
+        const n = puntos.length;
+        const sumaX = puntos.reduce((acc, p) => acc + p.pasos, 0);
+        const sumaY = puntos.reduce((acc, p) => acc + p.distanciaMM, 0);
+        const sumaXY = puntos.reduce((acc, p) => acc + p.pasos * p.distanciaMM, 0);
+        const sumaXX = puntos.reduce((acc, p) => acc + p.pasos * p.pasos, 0);
+
+        const denominador = n * sumaXX - sumaX * sumaX;
+        if (denominador === 0) return null;
+
+        const B = (n * sumaXY - sumaX * sumaY) / denominador;
+        const A = (sumaY - B * sumaX) / n;
+
+        // B tiene que ser positivo: alejarse del home aumenta la distancia. Si
+        // sale negativo, las medidas están al revés o hay un error de tecleo.
+        if (!(B > 0)) {
+            return { error: 'Las distancias no crecen al alejarse del home. Revisa las medidas.' };
+        }
+
+        const pasosPorMM = 1 / B;
+        const residuos = puntos.map(p => ({
+            pasos: p.pasos,
+            distanciaMM: p.distanciaMM,
+            residuoMM: p.distanciaMM - (A + B * p.pasos)
+        }));
+        const peorResiduo = Math.max(...residuos.map(r => Math.abs(r.residuoMM)));
+
+        return { pasosPorMM, origenMM: A, residuos, peorResiduo };
+    }
+
+    /**
+     * La escala con la que se traducen los vasos a mm: la recién medida si la
+     * hay, y si no la que la máquina ya tiene cargada.
+     */
+    calYPasosPorMM() {
+        const ajuste = this.calY.ajuste;
+        if (ajuste && !ajuste.error) return ajuste.pasosPorMM;
+        return this.calY.calibracion?.stepsPerMm ?? null;
+    }
+
+    calYCapturarVaso(indice) {
+        if (!this.isAdmin || this.calY.ocupado) return;
+
+        this.calY.vasos[indice] = this.calY.pasosActuales;
+        const ppm = this.calYPasosPorMM();
+        const enMM = ppm ? ` (${(this.calY.pasosActuales / ppm).toFixed(1)} mm)` : '';
+        this.calYEstado(`Vaso ${indice + 1} capturado en ${this.calY.pasosActuales} pasos${enMM}.`, 'success');
+        this.renderYCalibration();
+    }
+
+    /**
+     * Lleva el eje a la distancia en mm que se haya escrito para ese vaso, para
+     * poder MIRAR si acierta antes de capturar nada. Es también la verificación
+     * del conjunto: tras aplicar, el sustrato debe quedar centrado sobre el vaso.
+     *
+     * El campo arranca con lo que ya está capturado, así que sin tocarlo el
+     * botón hace justo lo de antes: volver a la posición guardada.
+     */
+    async calYIrAVaso(indice) {
+        if (!this.isAdmin || this.calY.ocupado) return;
+
+        const ppm = this.calYPasosPorMM();
+        if (!Number.isFinite(ppm) || ppm <= 0) {
+            this.calYEstado('Sin la escala del eje no se pueden traducir los mm a pasos', 'warning');
+            return;
+        }
+
+        const mm = parseFloat(document.getElementById(`caly-goto-${indice + 1}`)?.value);
+        if (!Number.isFinite(mm) || mm < 0) {
+            this.calYEstado(`Escribe a cuántos mm del home quieres llevar el eje para el vaso ${indice + 1}`, 'warning');
+            return;
+        }
+
+        const diferencia = Math.round(mm * ppm) - this.calY.pasosActuales;
+        if (diferencia === 0) {
+            this.calYEstado(`El eje ya está en ${mm.toFixed(1)} mm.`, 'info');
+            return;
+        }
+
+        this.calYOcupado(true, `Moviendo a ${mm.toFixed(1)} mm...`);
+        try {
+            const respuesta = await this.calYApi('/jog', {
+                method: 'POST',
+                body: JSON.stringify({ steps: diferencia })
+            });
+            if (!respuesta.success) throw new Error(respuesta.message);
+
+            this.calY.pasosActuales = respuesta.result.currentSteps;
+            this.calYEstado(`Eje en ${mm.toFixed(1)} mm. Si el sustrato queda centrado sobre el vaso ${indice + 1}, pulsa Capturar.`, 'info');
+        } catch (error) {
+            this.calYEstado(`Error moviendo el eje: ${error.message}`, 'danger');
+        } finally {
+            this.calYOcupado(false);
+            this.renderYCalibration();
+        }
     }
 
     async calYAplicar() {
         if (!this.isAdmin || this.calY.ocupado) return;
 
-        const pasosPorMM = parseFloat(document.getElementById('caly-steps-per-mm')?.value);
-
-        // El vaso 1 puede quedarse en 0 (el home), así que aquí solo se exige
-        // que sea un número y no negativo. Que quepa en el eje lo comprueba el
-        // firmware, que es quien conoce el final de carrera.
-        const posiciones = [];
-        for (let i = 1; i <= 4; i++) {
-            const mm = parseFloat(document.getElementById(`caly-pos-${i}`)?.value);
-            if (!Number.isFinite(mm) || mm < 0) {
-                this.calYEstado(`Escribe la posición del vaso ${i} en mm (desde el home)`, 'warning');
-                return;
-            }
-            posiciones.push(Number(mm.toFixed(2)));
+        const pasosPorMM = this.calYPasosPorMM();
+        if (!Number.isFinite(pasosPorMM) || pasosPorMM <= 0) {
+            this.calYEstado('Falta la escala del eje: registra al menos dos medidas', 'warning');
+            return;
         }
 
-        if (!Number.isFinite(pasosPorMM) || pasosPorMM <= 0) {
-            this.calYEstado('Escribe los pasos por mm del eje', 'warning');
-            return;
+        // El vaso 1 puede quedarse en 0 (el home), así que aquí solo se exige
+        // que esté capturado y no sea negativo. Que quepa en el eje lo comprueba
+        // el firmware, que es quien conoce el final de carrera.
+        const posiciones = [];
+        for (let i = 0; i < 4; i++) {
+            const pasos = this.calY.vasos[i];
+            if (!Number.isFinite(pasos) || pasos < 0) {
+                this.calYEstado(`Falta capturar la posición del vaso ${i + 1}`, 'warning');
+                return;
+            }
+            posiciones.push(Number((pasos / pasosPorMM).toFixed(2)));
         }
 
         this.calYOcupado(true, 'Aplicando geometría en la máquina...');
@@ -668,7 +917,7 @@ class ConfigurationScreen {
             if (!respuesta.success) throw new Error(respuesta.message);
 
             this.calY.calibracion = respuesta.calibration;
-            this.calYEstado('Geometría aplicada en memoria. Lanza un home y comprueba que el eje para centrado en cada vaso antes de guardar.', 'success');
+            this.calYEstado('Geometría aplicada en memoria. Comprueba con «Ir» que el eje para centrado en cada vaso antes de guardar.', 'success');
         } catch (error) {
             this.calYEstado(`Error aplicando la geometría: ${error.message}`, 'danger');
         } finally {
@@ -725,6 +974,12 @@ class ConfigurationScreen {
             if (!respuesta.success) throw new Error(respuesta.message);
 
             this.calY.calibracion = respuesta.calibration;
+            // La medición en curso ya no describe esta geometría: se descarta
+            // entera, igual que tras un home, en vez de dejar media serie viva.
+            this.calY.puntos = [];
+            this.calY.ajuste = null;
+            this.calY.vasos = [null, null, null, null];
+            this.calYSincronizarConMaquina();
             this.calYEstado('Geometría de fábrica restaurada.', 'success');
         } catch (error) {
             this.calYEstado(`Error restaurando la geometría: ${error.message}`, 'danger');
@@ -749,30 +1004,109 @@ class ConfigurationScreen {
                 : '<div class="col-12 text-muted small">Sin datos: conecta el Arduino para leer la geometría.</div>';
         }
 
-        // Los campos se rellenan con lo que hay en la máquina, no con un valor
-        // fijo: así el operador ve de dónde parte antes de tocar nada.
-        if (cal) {
-            cal.vesselPositionsMm.forEach((mm, i) => {
-                const campo = document.getElementById(`caly-pos-${i + 1}`);
-                if (campo && document.activeElement !== campo) campo.value = mm.toFixed(1);
-            });
-            const pasos = document.getElementById('caly-steps-per-mm');
-            if (pasos && document.activeElement !== pasos) {
-                pasos.value = cal.stepsPerMm.toFixed(4);
+        const contador = document.getElementById('caly-position');
+        if (contador) contador.textContent = `${this.calY.pasosActuales} pasos desde home`;
+
+        const tabla = document.getElementById('caly-points');
+        if (tabla) {
+            if (!this.calY.puntos.length) {
+                tabla.innerHTML = '<tr><td colspan="3" class="text-muted small text-center py-3">Aún no hay medidas</td></tr>';
+            } else {
+                const ajuste = this.calY.ajuste;
+                tabla.innerHTML = this.calY.puntos.map((p, i) => {
+                    const residuo = ajuste && !ajuste.error ? ajuste.residuos[i].residuoMM : null;
+                    const fuera = residuo !== null && Math.abs(residuo) > 2;
+                    return `
+                        <tr class="${fuera ? 'table-warning' : ''}">
+                            <td>${p.pasos}</td>
+                            <td>${p.distanciaMM.toFixed(1)} mm</td>
+                            <td class="${fuera ? 'fw-bold' : 'text-muted'}">${ConfigurationScreen.formatearResiduo(residuo)}</td>
+                        </tr>
+                    `;
+                }).join('');
             }
         }
+
+        const resultado = document.getElementById('caly-result');
+        if (resultado) {
+            const ajuste = this.calY.ajuste;
+            if (!ajuste) {
+                const actualPPM = cal
+                    ? `<div class="text-muted small mt-2">Mientras tanto se usa la escala cargada en la máquina: <strong>${cal.stepsPerMm.toFixed(3)}</strong> pasos/mm.</div>`
+                    : '';
+                resultado.innerHTML = `<span class="text-muted small">Registra al menos dos medidas para recalcular la escala.</span>${actualPPM}`;
+            } else if (ajuste.error) {
+                resultado.innerHTML = `<span class="text-danger small fw-bold">${ajuste.error}</span>`;
+            } else {
+                const aviso = ajuste.peorResiduo > 2
+                    ? `<div class="text-warning small mt-2"><i class="bi bi-exclamation-triangle me-1"></i>Hay medidas que se desvían hasta ${ajuste.peorResiduo.toFixed(1)} mm del ajuste. Repite las marcadas antes de aplicar.</div>`
+                    : `<div class="text-success small mt-2"><i class="bi bi-check-circle me-1"></i>Las medidas encajan en una recta (desviación máxima ${ajuste.peorResiduo.toFixed(1)} mm).</div>`;
+                resultado.innerHTML = `
+                    <div class="row g-3">
+                        <div class="col-6"><span class="text-muted x-small d-block">Pasos por mm calculados</span><strong class="fs-5">${ajuste.pasosPorMM.toFixed(3)}</strong></div>
+                        <div class="col-6"><span class="text-muted x-small d-block">Recorrido por ${this.calY.tamanoPaso} pasos</span><strong class="fs-5">${(this.calY.tamanoPaso / ajuste.pasosPorMM).toFixed(1)} mm</strong></div>
+                    </div>
+                    ${aviso}
+                `;
+            }
+        }
+
+        // Los vasos se guardan en pasos y se muestran en mm con la escala que se
+        // vaya a aplicar: si se recalcula la escala, los mm cambian solos sin
+        // que haya que recapturar nada, porque el vaso sigue donde estaba.
+        const ppm = this.calYPasosPorMM();
+        this.calY.vasos.forEach((pasos, i) => {
+            const celda = document.getElementById(`caly-pos-${i + 1}`);
+            if (celda) {
+                if (!Number.isFinite(pasos)) {
+                    celda.innerHTML = '<span class="text-muted">sin capturar</span>';
+                } else {
+                    const mm = ppm ? `${(pasos / ppm).toFixed(1)} mm` : '—';
+                    celda.innerHTML = `<strong>${mm}</strong> <span class="text-muted x-small">(${pasos} pasos)</span>`;
+                }
+            }
+
+            // El campo de «Ir» parte de lo capturado, para que sirva tanto de
+            // punto de partida al tantear como de vuelta a lo ya guardado. No se
+            // pisa mientras se está escribiendo en él.
+            const destino = document.getElementById(`caly-goto-${i + 1}`);
+            if (destino && document.activeElement !== destino) {
+                destino.value = Number.isFinite(pasos) && ppm ? (pasos / ppm).toFixed(1) : '';
+            }
+        });
+
+        // «Ir» ya no depende de que el vaso esté capturado -su razón de ser es
+        // justo mirar antes de capturar-, solo de que haya escala con la que
+        // traducir los mm a pasos.
+        document.querySelectorAll('[data-caly-ir]').forEach((boton) => {
+            boton.disabled = this.calY.ocupado || !Number.isFinite(ppm);
+        });
 
         // Hasta dónde llega el eje con la escala actual. Pasarse es el error más
         // fácil de cometer aquí, y el firmware rechaza el conjunto entero.
         const limite = document.getElementById('caly-limit');
         if (limite) {
-            limite.textContent = cal && cal.axisLimitSteps && cal.stepsPerMm
-                ? `Con esta escala, ningún vaso puede pasar de ${(cal.axisLimitSteps / cal.stepsPerMm).toFixed(1)} mm (final de carrera).`
+            limite.textContent = cal && cal.axisLimitSteps && ppm
+                ? `Con esta escala, ningún vaso puede pasar de ${(cal.axisLimitSteps / ppm).toFixed(1)} mm (final de carrera).`
                 : '';
         }
 
         const aplicar = document.getElementById('caly-apply-btn');
-        if (aplicar) aplicar.disabled = !this.isAdmin || this.calY.ocupado;
+        if (aplicar) {
+            aplicar.disabled = !this.isAdmin || this.calY.ocupado
+                || !Number.isFinite(ppm)
+                || this.calY.vasos.some(pasos => !Number.isFinite(pasos));
+        }
+    }
+
+    /**
+     * Residuo del ajuste con su signo. Redondea ANTES de mirar el signo: sin
+     * eso, un residuo de -1e-15 se imprimía como "-0.0 mm" y parecía un sesgo.
+     */
+    static formatearResiduo(residuoMM) {
+        if (residuoMM === null) return '—';
+        const redondeado = Math.round(residuoMM * 10) / 10 || 0;
+        return `${redondeado > 0 ? '+' : ''}${redondeado.toFixed(1)} mm`;
     }
 
     static getTemplate() {
@@ -905,8 +1239,8 @@ class ConfigurationScreen {
                                         </button>
                                     </div>
                                     <div class="col-md-3">
-                                        <label class="form-label x-small text-muted mb-1">Altura medida (cm)</label>
-                                        <input type="number" step="0.1" class="form-control" id="calz-measure-input" placeholder="p. ej. 22.5">
+                                        <label class="form-label x-small text-muted mb-1">Altura medida (mm)</label>
+                                        <input type="number" step="0.1" class="form-control" id="calz-measure-input" placeholder="p. ej. 225">
                                     </div>
                                     <div class="col-md-2">
                                         <button class="btn btn-primary w-100" type="button" id="calz-measure-btn">
@@ -956,8 +1290,8 @@ class ConfigurationScreen {
                                         </button>
                                     </div>
                                     <div class="col-md-2">
-                                        <label class="form-label x-small text-muted mb-1">Verificar a (cm)</label>
-                                        <input type="number" step="0.1" class="form-control" id="calz-verify-height" value="15">
+                                        <label class="form-label x-small text-muted mb-1">Verificar a (mm)</label>
+                                        <input type="number" step="0.1" class="form-control" id="calz-verify-height" value="150">
                                     </div>
                                     <div class="col-md-2">
                                         <button class="btn btn-outline-secondary w-100" type="button" id="calz-verify-btn">
@@ -997,41 +1331,154 @@ class ConfigurationScreen {
 
                                 <hr class="my-4 opacity-10">
 
+                                <h6 class="text-primary fw-bold x-small mb-1">Asistente de medición</h6>
                                 <p class="text-muted small mb-3">
-                                    Mide con la regla desde el <strong>home del eje Y</strong> hasta el centro de cada vaso.
-                                    Cada vaso va por su cuenta, así que no hace falta que estén igualmente separados: si se
-                                    reubica uno, se corrige solo ese. Los <em>pasos por mm</em> son la mecánica del eje y
-                                    solo se tocan si se cambia la transmisión; de ellos depende que la velocidad de
-                                    transferencia en mm/s de las recetas signifique lo que dice.
+                                    Haz <strong>Home</strong>, mide con la regla la distancia hasta el sustrato y
+                                    regístrala. Después mueve el eje y vuelve a medir, al menos tres veces. La escala
+                                    sale de las <em>diferencias</em> entre medidas, así que no depende de acertar desde
+                                    dónde mide la regla. Solo hay que rehacerla si se cambia la transmisión del eje.
                                 </p>
 
-                                <div class="row g-3 align-items-end">
-                                    <div class="col-6 col-md-3">
-                                        <label class="form-label x-small text-muted mb-1">Vaso 1 (mm)</label>
-                                        <input type="number" step="0.1" min="0" class="form-control" id="caly-pos-1" value="0">
+                                <div class="row g-3 align-items-end mb-3">
+                                    <div class="col-md-2">
+                                        <button class="btn btn-outline-primary w-100" type="button" id="caly-home-btn">
+                                            <i class="bi bi-house me-1"></i>Home
+                                        </button>
                                     </div>
-                                    <div class="col-6 col-md-3">
-                                        <label class="form-label x-small text-muted mb-1">Vaso 2 (mm)</label>
-                                        <input type="number" step="0.1" min="0" class="form-control" id="caly-pos-2" value="55">
+                                    <div class="col-md-3">
+                                        <label class="form-label x-small text-muted mb-1">Tamaño del movimiento (pasos)</label>
+                                        <input type="number" class="form-control" id="caly-step-size" value="1000" min="1" step="100">
                                     </div>
-                                    <div class="col-6 col-md-3">
-                                        <label class="form-label x-small text-muted mb-1">Vaso 3 (mm)</label>
-                                        <input type="number" step="0.1" min="0" class="form-control" id="caly-pos-3" value="110">
+                                    <div class="col-md-2">
+                                        <div class="btn-group w-100" role="group">
+                                            <button class="btn btn-outline-primary" type="button" id="caly-back-btn" title="Acercar al home">
+                                                <i class="bi bi-arrow-left"></i>
+                                            </button>
+                                            <button class="btn btn-outline-primary" type="button" id="caly-fwd-btn" title="Alejar del home">
+                                                <i class="bi bi-arrow-right"></i>
+                                            </button>
+                                        </div>
                                     </div>
-                                    <div class="col-6 col-md-3">
-                                        <label class="form-label x-small text-muted mb-1">Vaso 4 (mm)</label>
-                                        <input type="number" step="0.1" min="0" class="form-control" id="caly-pos-4" value="165">
+                                    <div class="col-md-3">
+                                        <label class="form-label x-small text-muted mb-1">Distancia medida (mm)</label>
+                                        <input type="number" step="0.1" class="form-control" id="caly-measure-input" placeholder="p. ej. 55">
                                     </div>
-                                    <div class="col-md-4">
-                                        <label class="form-label x-small text-muted mb-1">Pasos por mm del eje</label>
-                                        <input type="number" step="0.0001" min="1" class="form-control" id="caly-steps-per-mm" value="76.3636">
+                                    <div class="col-md-2">
+                                        <button class="btn btn-primary w-100" type="button" id="caly-measure-btn">
+                                            Registrar
+                                        </button>
                                     </div>
-                                    <div class="col-md-4">
-                                        <button class="btn btn-warning w-100" type="button" id="caly-apply-btn">
+                                </div>
+
+                                <div class="row g-3">
+                                    <div class="col-md-6">
+                                        <div class="d-flex justify-content-between align-items-center mb-1">
+                                            <span class="x-small text-muted" id="caly-position">0 pasos desde home</span>
+                                            <button class="btn btn-sm btn-link text-decoration-none py-0" type="button" id="caly-undo-btn">
+                                                Quitar última
+                                            </button>
+                                        </div>
+                                        <table class="table table-sm mb-0 border">
+                                            <thead class="table-light">
+                                                <tr>
+                                                    <th class="x-small">Pasos</th>
+                                                    <th class="x-small">Distancia</th>
+                                                    <th class="x-small">Desviación</th>
+                                                </tr>
+                                            </thead>
+                                            <tbody id="caly-points">
+                                                <tr><td colspan="3" class="text-muted small text-center py-3">Aún no hay medidas</td></tr>
+                                            </tbody>
+                                        </table>
+                                    </div>
+                                    <div class="col-md-6">
+                                        <div class="border rounded p-3 h-100 bg-light" id="caly-result">
+                                            <span class="text-muted small">Registra al menos dos medidas para recalcular la escala.</span>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <hr class="my-4 opacity-10">
+
+                                <h6 class="text-primary fw-bold x-small mb-1">Posición de los vasos</h6>
+                                <p class="text-muted small mb-3">
+                                    Escribe a cuántos mm del home crees que está el vaso y pulsa <strong>Ir</strong>:
+                                    el eje se planta ahí y decides mirándolo. Si el sustrato no queda centrado, corrige
+                                    el número o remátalo con los botones de movimiento de arriba. Cuando esté, pulsa
+                                    <strong>Capturar</strong>: la posición se toma de los pasos reales del eje, sin
+                                    regla de por medio. Cada vaso va por su cuenta, así que si se reubica uno se
+                                    recaptura solo ese. El campo arranca con lo que ya está capturado, así que
+                                    <strong>Ir</strong> sin tocar nada devuelve el eje a lo guardado.
+                                </p>
+
+                                <div class="row g-3">
+                                    <div class="col-12 col-md-6">
+                                        <div class="border rounded px-3 py-2">
+                                            <div class="d-flex align-items-center justify-content-between mb-2">
+                                                <span class="x-small text-muted fw-bold">VASO 1</span>
+                                                <span class="small" id="caly-pos-1">sin capturar</span>
+                                            </div>
+                                            <div class="input-group input-group-sm">
+                                                <input type="number" step="0.1" min="0" class="form-control" id="caly-goto-1" placeholder="mm desde el home">
+                                                <span class="input-group-text">mm</span>
+                                                <button class="btn btn-outline-secondary" type="button" data-caly-ir="0">Ir</button>
+                                                <button class="btn btn-outline-primary" type="button" data-caly-capturar="0">Capturar</button>
+                                            </div>
+                                        </div>
+                                    </div>
+                                    <div class="col-12 col-md-6">
+                                        <div class="border rounded px-3 py-2">
+                                            <div class="d-flex align-items-center justify-content-between mb-2">
+                                                <span class="x-small text-muted fw-bold">VASO 2</span>
+                                                <span class="small" id="caly-pos-2">sin capturar</span>
+                                            </div>
+                                            <div class="input-group input-group-sm">
+                                                <input type="number" step="0.1" min="0" class="form-control" id="caly-goto-2" placeholder="mm desde el home">
+                                                <span class="input-group-text">mm</span>
+                                                <button class="btn btn-outline-secondary" type="button" data-caly-ir="1">Ir</button>
+                                                <button class="btn btn-outline-primary" type="button" data-caly-capturar="1">Capturar</button>
+                                            </div>
+                                        </div>
+                                    </div>
+                                    <div class="col-12 col-md-6">
+                                        <div class="border rounded px-3 py-2">
+                                            <div class="d-flex align-items-center justify-content-between mb-2">
+                                                <span class="x-small text-muted fw-bold">VASO 3</span>
+                                                <span class="small" id="caly-pos-3">sin capturar</span>
+                                            </div>
+                                            <div class="input-group input-group-sm">
+                                                <input type="number" step="0.1" min="0" class="form-control" id="caly-goto-3" placeholder="mm desde el home">
+                                                <span class="input-group-text">mm</span>
+                                                <button class="btn btn-outline-secondary" type="button" data-caly-ir="2">Ir</button>
+                                                <button class="btn btn-outline-primary" type="button" data-caly-capturar="2">Capturar</button>
+                                            </div>
+                                        </div>
+                                    </div>
+                                    <div class="col-12 col-md-6">
+                                        <div class="border rounded px-3 py-2">
+                                            <div class="d-flex align-items-center justify-content-between mb-2">
+                                                <span class="x-small text-muted fw-bold">VASO 4</span>
+                                                <span class="small" id="caly-pos-4">sin capturar</span>
+                                            </div>
+                                            <div class="input-group input-group-sm">
+                                                <input type="number" step="0.1" min="0" class="form-control" id="caly-goto-4" placeholder="mm desde el home">
+                                                <span class="input-group-text">mm</span>
+                                                <button class="btn btn-outline-secondary" type="button" data-caly-ir="3">Ir</button>
+                                                <button class="btn btn-outline-primary" type="button" data-caly-capturar="3">Capturar</button>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <hr class="my-4 opacity-10">
+
+                                <div class="row g-3">
+                                    <div class="col-md-6">
+                                        <button class="btn btn-warning w-100" type="button" id="caly-apply-btn" disabled>
                                             1. Aplicar (sin guardar)
                                         </button>
                                     </div>
-                                    <div class="col-md-4">
+                                    <div class="col-md-6">
                                         <button class="btn btn-success w-100" type="button" id="caly-save-btn">
                                             2. Guardar
                                         </button>
@@ -1043,6 +1490,7 @@ class ConfigurationScreen {
                             </div>
                         </div>
                     </div>
+
                 </div>
             </div>
         `;

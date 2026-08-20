@@ -28,7 +28,7 @@ máquina lo ignora.
 ### 1. La migración de la base
 
 ```bash
-mysql -u root -p silar_db < database/migration_add_emersion_speed.sql
+mysql -u root -p silar_db < database/004_emersion_speed.sql
 ```
 
 Agrega `emersion_speed` a `recipe_parameters` y a `recipe_stages`. Es

@@ -16,7 +16,7 @@
 -- ejecución de la inmersión.
 -- =====================================================
 
-SET @exist_emersion_params := (SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = 'silar_db' AND TABLE_NAME = 'recipe_parameters' AND COLUMN_NAME = 'emersion_speed');
+SET @exist_emersion_params := (SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'recipe_parameters' AND COLUMN_NAME = 'emersion_speed');
 
 SET @sql_emersion_params = IF(@exist_emersion_params = 0,
     'ALTER TABLE recipe_parameters ADD COLUMN emersion_speed DECIMAL(8,2) DEFAULT 0.0 COMMENT ''Velocidad Z de subida del sustrato, en mm/s (0 = usar dip_speed)'' AFTER dip_speed',
@@ -28,8 +28,8 @@ DEALLOCATE PREPARE stmt;
 -- recipe_stages lleva las mismas columnas de parámetros que recipe_parameters:
 -- una etapa es una receta encadenada, y si la columna faltara aquí una receta
 -- por etapas no podría ajustar la emersión.
-SET @exist_emersion_stages := (SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = 'silar_db' AND TABLE_NAME = 'recipe_stages' AND COLUMN_NAME = 'emersion_speed');
-SET @exist_tabla_stages := (SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA = 'silar_db' AND TABLE_NAME = 'recipe_stages');
+SET @exist_emersion_stages := (SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'recipe_stages' AND COLUMN_NAME = 'emersion_speed');
+SET @exist_tabla_stages := (SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'recipe_stages');
 
 SET @sql_emersion_stages = IF(@exist_tabla_stages > 0 AND @exist_emersion_stages = 0,
     'ALTER TABLE recipe_stages ADD COLUMN emersion_speed DECIMAL(8,2) DEFAULT 0.0 COMMENT ''Velocidad Z de subida del sustrato, en mm/s (0 = usar dip_speed)'' AFTER dip_speed',

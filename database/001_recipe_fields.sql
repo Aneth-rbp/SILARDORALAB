@@ -5,8 +5,8 @@
 -- =====================================================
 
 -- Verificar si las columnas ya existen antes de agregarlas
-SET @exist_dipping_wait0 := (SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = 'silar_db' AND TABLE_NAME = 'recipe_parameters' AND COLUMN_NAME = 'dipping_wait0');
-SET @exist_cycles := (SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = 'silar_db' AND TABLE_NAME = 'recipe_parameters' AND COLUMN_NAME = 'cycles');
+SET @exist_dipping_wait0 := (SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'recipe_parameters' AND COLUMN_NAME = 'dipping_wait0');
+SET @exist_cycles := (SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'recipe_parameters' AND COLUMN_NAME = 'cycles');
 
 -- Agregar columnas de tiempos de inmersión si no existen
 SET @sql_dipping_wait0 = IF(@exist_dipping_wait0 = 0, 
@@ -88,7 +88,7 @@ EXECUTE stmt;
 DEALLOCATE PREPARE stmt;
 
 -- Agregar columnas de posiciones si no existen
-SET @exist_dip_start_position := (SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = 'silar_db' AND TABLE_NAME = 'recipe_parameters' AND COLUMN_NAME = 'dip_start_position');
+SET @exist_dip_start_position := (SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'recipe_parameters' AND COLUMN_NAME = 'dip_start_position');
 
 SET @sql_dip_start_position = IF(@exist_dip_start_position = 0,
     'ALTER TABLE recipe_parameters ADD COLUMN dip_start_position DECIMAL(8,2) DEFAULT 0.0 COMMENT ''Posición inicial Z con sustrato'' AFTER except_dripping4',

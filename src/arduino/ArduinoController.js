@@ -19,6 +19,13 @@ class ArduinoController extends EventEmitter {
         this.isConnected = false;
         this.portPath = null;
         this.reconnectTimer = null;
+        // Version del firmware que declara la placa. null = todavia no se sabe,
+        // o el firmware es tan viejo que no sabe decirla.
+        this.firmwareVersion = null;
+        // Mientras se graba el firmware el puerto se cierra a proposito; sin
+        // esto la reconexion automatica se lo arrebataria a avrdude a media
+        // grabacion.
+        this.reconexionPausada = false;
         this.commandQueue = [];
         this.processingCommand = false;
 
@@ -255,6 +262,11 @@ class ArduinoController extends EventEmitter {
         if (!data || data.length === 0) return;
 
         logger.debug(`Arduino → ${data}`);
+
+        // La placa la anuncia sola al arrancar y tambien al preguntarle "FW?".
+        if (data.startsWith('FIRMWARE:')) {
+            this.firmwareVersion = data.slice('FIRMWARE:'.length).trim();
+        }
 
         try {
             // Parsear la respuesta usando el parser
@@ -561,6 +573,11 @@ class ArduinoController extends EventEmitter {
             dippingWait2: Number(parameters.dippingWait2) || 5000,
             dippingWait3: Number(parameters.dippingWait3) || 5000,
             transferWait: Number(parameters.transferWait) || 2000,
+            // Escurrido tras la emersión, antes de viajar al vaso siguiente. Un
+            // 0 significa "sin espera": es como corría el equipo antes de que
+            // este parámetro existiera, así que las recetas ya guardadas siguen
+            // haciendo exactamente lo mismo.
+            transitionWait: Number(parameters.transitionWait) || 0,
             exceptDripping1: parameters.exceptDripping1 || false,
             exceptDripping2: parameters.exceptDripping2 || false,
             exceptDripping3: parameters.exceptDripping3 || false,
@@ -909,6 +926,13 @@ class ArduinoController extends EventEmitter {
             throw new Error('Los pasos deben ser un entero distinto de cero');
         }
 
+        // Con el paro activo el firmware contesta con un error y NO imprime la
+        // posición, así que sin esto la espera se comía los 60 s de timeout
+        // enteros antes de decir nada.
+        if (this.currentState.emergencyStop) {
+            throw new Error('No se puede mover el eje: Paro de emergencia activo');
+        }
+
         logger.info(`Jog de calibración en Z: ${pasos} pasos`);
         this.currentState.axisZ.moving = true;
         try {
@@ -918,6 +942,39 @@ class ArduinoController extends EventEmitter {
             return { success: true, currentSteps: posicion };
         } catch (error) {
             this.currentState.axisZ.moving = false;
+            throw error;
+        }
+    }
+
+    /**
+     * Jog de Y en pasos crudos que ESPERA a que el movimiento termine, igual
+     * que jogZSteps y por el mismo motivo: el asistente de geometría pide medir
+     * con la regla justo cuando el eje se ha parado, y necesita la posición
+     * real del eje (no la que se supone) para capturar dónde queda cada vaso.
+     * El firmware cierra el movimiento imprimiendo "Y: <posicion>".
+     */
+    async jogYSteps(steps) {
+        const pasos = Number(steps);
+        if (!Number.isInteger(pasos) || pasos === 0) {
+            throw new Error('Los pasos deben ser un entero distinto de cero');
+        }
+
+        // Con el paro activo el firmware contesta con un error y NO imprime la
+        // posición, así que sin esto la espera se comía los 60 s de timeout
+        // enteros antes de decir nada.
+        if (this.currentState.emergencyStop) {
+            throw new Error('No se puede mover el eje: Paro de emergencia activo');
+        }
+
+        logger.info(`Jog de calibración en Y: ${pasos} pasos`);
+        this.currentState.axisY.moving = true;
+        try {
+            const linea = await this.sendCommandAwaitLine(`Y${pasos}`, /^Y:\s*-?\d+/, 60000);
+            this.currentState.axisY.moving = false;
+            const posicion = Number(linea.split(':')[1]);
+            return { success: true, currentSteps: posicion };
+        } catch (error) {
+            this.currentState.axisY.moving = false;
             throw error;
         }
     }
@@ -960,9 +1017,75 @@ class ArduinoController extends EventEmitter {
     }
 
     /**
+     * Le pregunta a la placa que firmware trae.
+     *
+     * Devuelve null si no contesta o si contesta que no conoce el comando: un
+     * firmware anterior a FW? no sabe responder, y para el caso eso significa
+     * lo mismo que "trae uno viejo".
+     */
+    async consultarVersionFirmware(timeout = 3000) {
+        if (!this.isConnected) return null;
+
+        try {
+            const linea = await this.sendCommandAwaitLine('FW?', /^FIRMWARE:/, timeout);
+            this.firmwareVersion = linea.slice(linea.indexOf(':') + 1).trim();
+        } catch (error) {
+            logger.info(`La placa no informa su firmware: ${error.message}`);
+            this.firmwareVersion = null;
+        }
+
+        return this.firmwareVersion;
+    }
+
+    /**
+     * Suelta el puerto para que lo pueda usar avrdude y deja de reconectar solo.
+     */
+    async liberarPuertoParaGrabar() {
+        this.reconexionPausada = true;
+        if (this.reconnectTimer) {
+            clearTimeout(this.reconnectTimer);
+            this.reconnectTimer = null;
+        }
+        await this.disconnect();
+    }
+
+    /**
+     * Vuelve a tomar el puerto despues de grabar.
+     *
+     * Al terminar avrdude la placa se reinicia: el bootloader espera un par de
+     * segundos antes de arrancar el sketch, y en Windows el puerto tarda un
+     * momento en quedar libre. Por eso espera y reintenta en vez de conectar de
+     * golpe; si se rinde, queda la reconexion automatica de siempre.
+     */
+    async retomarPuertoTrasGrabar(portPath = null) {
+        this.firmwareVersion = null;
+        const puerto = portPath || this.portPath;
+
+        for (let intento = 1; intento <= 3; intento++) {
+            await new Promise(resolve => setTimeout(resolve, 3000));
+            try {
+                const resultado = await this.connect(puerto);
+                this.reconexionPausada = false;
+                return resultado;
+            } catch (error) {
+                logger.warn(`Reconexion tras grabar, intento ${intento}: ${error.message}`);
+            }
+        }
+
+        this.reconexionPausada = false;
+        this.attemptReconnect();
+        throw new Error('No se pudo reabrir el puerto despues de grabar');
+    }
+
+    /**
      * Intenta reconectar automáticamente
      */
     attemptReconnect() {
+        if (this.reconexionPausada) {
+            logger.info('Reconexion en pausa (grabando firmware)');
+            return;
+        }
+
         if (this.reconnectTimer) {
             clearTimeout(this.reconnectTimer);
         }

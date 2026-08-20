@@ -24,16 +24,22 @@ jobs:
 
     steps:
       - name: Descargar el repositorio
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Preparar Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v5
         with:
           node-version: 20
           cache: npm
 
       - name: Instalar dependencias
         run: npm ci
+
+      # Deja firmware-build/ con el .hex y avrdude; package.json lo empaqueta como
+      # extraResources para que la app pueda grabar el Arduino sin que nadie vaya
+      # al laboratorio. Si esto falla, el instalador saldria sin firmware.
+      - name: Compilar el firmware del Arduino
+        run: npm run compilar-firmware
 
       - name: Compilar y publicar
         run: npx electron-builder --win --publish always

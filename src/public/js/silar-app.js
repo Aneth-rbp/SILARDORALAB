@@ -89,6 +89,10 @@ class SilarApp {
         
         this.iniciarSeguimientoDelProceso();
 
+        // Si el instalador trae un firmware mas nuevo que el de la placa, se le
+        // ofrece al operador grabarla (js/firmware.js). No bloquea el arranque.
+        window.revisarFirmwareDelArduino?.(this);
+
         // Verificar estado cada 30 segundos
         setInterval(() => this.checkSystemStatus(), 30000);
         
@@ -114,6 +118,7 @@ class SilarApp {
             dippingWait2: 1800,
             dippingWait3: 2200,
             transferWait: 500,
+            transitionWait: 1000,
             cycles: 15,
             fan: true,
             exceptDripping1: false,

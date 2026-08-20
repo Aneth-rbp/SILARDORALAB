@@ -13,3 +13,6 @@ Thumbs.db
 
 # Config por equipo (Docker aqui, XAMPP en el laboratorio)
 silar-config.json
+
+# Lo genera scripts/compilar-firmware.js en cada build (incluye arduino-cli entero)
+firmware-build/

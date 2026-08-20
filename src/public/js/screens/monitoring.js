@@ -334,7 +334,8 @@ class MonitoringScreen {
             { name: 'dippingWait1', label: 'Tiempo Inmersión 2', unit: 'ms', category: 'process', description: 'Tiempo de inmersión 2' },
             { name: 'dippingWait2', label: 'Tiempo Inmersión 3', unit: 'ms', category: 'process', description: 'Tiempo de inmersión 3' },
             { name: 'dippingWait3', label: 'Tiempo Inmersión 4', unit: 'ms', category: 'process', description: 'Tiempo de inmersión 4' },
-            { name: 'transferWait', label: 'Tiempo Espera Y', unit: 'ms', category: 'process', description: 'Tiempo de espera para cambio de posición en Y' },
+            { name: 'transferWait', label: 'Espera antes de Inmersión', unit: 'ms', category: 'process', description: 'Espera con el sustrato ya sobre el vaso, antes de bajarlo' },
+            { name: 'transitionWait', label: 'Espera de Transición', unit: 'ms', category: 'process', description: 'Escurrido tras sacar el sustrato de la solución, antes de pasar al vaso siguiente' },
 
             // Sensores Ambientales y de Parrilla
             { name: 'envTemp', label: 'Temperatura Ambiental', unit: '°C', category: 'sensors', description: 'Registro de temperatura ambiental' },

@@ -73,7 +73,13 @@ CREATE TABLE IF NOT EXISTS recipe_parameters (
     dipping_wait1 INT DEFAULT 0 COMMENT 'Tiempo de inmersión 2 (ms)',
     dipping_wait2 INT DEFAULT 0 COMMENT 'Tiempo de inmersión 3 (ms)',
     dipping_wait3 INT DEFAULT 0 COMMENT 'Tiempo de inmersión 4 (ms)',
-    transfer_wait INT DEFAULT 0 COMMENT 'Tiempo de espera para cambio de posición en Y (ms)',
+    -- Ojo con el nombre: transfer_wait NO es el traslado en Y. Es la espera con el
+    -- sustrato ya sobre el vaso, justo antes de bajarlo, así que en la práctica
+    -- forma parte de la inmersión. El nombre se conserva por compatibilidad.
+    transfer_wait INT DEFAULT 0 COMMENT 'Espera sobre el vaso antes de bajar el sustrato (ms)',
+    -- La transición de verdad: el sustrato ya salió de la solución y escurre en
+    -- el aire antes de viajar al vaso siguiente. 0 = sin escurrido.
+    transition_wait INT DEFAULT 0 COMMENT 'Tiempo de escurrido tras la emersión, antes de pasar al siguiente vaso (ms)',
     -- Parámetros de proceso
     cycles INT DEFAULT 1 COMMENT 'Cantidad de ciclos por prueba',
     fan BOOLEAN DEFAULT false COMMENT 'Ventilador encendido/apagado',
@@ -150,7 +156,13 @@ CREATE TABLE IF NOT EXISTS recipe_stages (
     dipping_wait1 INT DEFAULT 0 COMMENT 'Tiempo de inmersión 2 (ms)',
     dipping_wait2 INT DEFAULT 0 COMMENT 'Tiempo de inmersión 3 (ms)',
     dipping_wait3 INT DEFAULT 0 COMMENT 'Tiempo de inmersión 4 (ms)',
-    transfer_wait INT DEFAULT 0 COMMENT 'Tiempo de espera para cambio de posición en Y (ms)',
+    -- Ojo con el nombre: transfer_wait NO es el traslado en Y. Es la espera con el
+    -- sustrato ya sobre el vaso, justo antes de bajarlo, así que en la práctica
+    -- forma parte de la inmersión. El nombre se conserva por compatibilidad.
+    transfer_wait INT DEFAULT 0 COMMENT 'Espera sobre el vaso antes de bajar el sustrato (ms)',
+    -- La transición de verdad: el sustrato ya salió de la solución y escurre en
+    -- el aire antes de viajar al vaso siguiente. 0 = sin escurrido.
+    transition_wait INT DEFAULT 0 COMMENT 'Tiempo de escurrido tras la emersión, antes de pasar al siguiente vaso (ms)',
     -- Parámetros de proceso
     cycles INT DEFAULT 1 COMMENT 'Cantidad de ciclos de esta etapa',
     fan BOOLEAN DEFAULT false COMMENT 'Ventilador encendido/apagado',
@@ -385,19 +397,19 @@ ON DUPLICATE KEY UPDATE
 -- duration está en minutos y sale de la misma fórmula que el formulario:
 -- (esperas + 3 transferencias + 4 inmersiones de bajada y subida) x ciclos.
 INSERT INTO recipe_parameters (recipe_id, duration, temperature, velocity_x, velocity_y, accel_x, accel_y, humidity_offset, temperature_offset,
-    dipping_wait0, dipping_wait1, dipping_wait2, dipping_wait3, transfer_wait,
+    dipping_wait0, dipping_wait1, dipping_wait2, dipping_wait3, transfer_wait, transition_wait,
     cycles, fan, except_dripping1, except_dripping2, except_dripping3, except_dripping4,
     dip_start_position, dipping_length, transfer_speed, dip_speed, emersion_speed,
     pos_y1, pos_y2, pos_y3, pos_y4) VALUES
 -- Receta 1: 103 s por ciclo x 20 ciclos = 34.3 min -> 35
 (1, 35, 25.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
-    20000, 10000, 20000, 10000, 1000,
+    20000, 10000, 20000, 10000, 1000, 0,
     20, false, false, false, false, false,
     0.0, 50.0, 20.0, 10.0, 10.0,
     0.0, 0.0, 0.0, 0.0),
 -- Receta 2: resumen de sus dos etapas (10+75 min, 10+30 ciclos)
 (2, 85, 25.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
-    10000, 5000, 10000, 5000, 1000,
+    10000, 5000, 10000, 5000, 1000, 0,
     40, false, false, false, false, false,
     0.0, 50.0, 20.0, 15.0, 15.0,
     0.0, 0.0, 0.0, 0.0)
@@ -415,6 +427,7 @@ ON DUPLICATE KEY UPDATE
     dipping_wait2 = VALUES(dipping_wait2),
     dipping_wait3 = VALUES(dipping_wait3),
     transfer_wait = VALUES(transfer_wait),
+    transition_wait = VALUES(transition_wait),
     cycles = VALUES(cycles),
     fan = VALUES(fan),
     except_dripping1 = VALUES(except_dripping1),
@@ -444,19 +457,19 @@ ON DUPLICATE KEY UPDATE
 -- los 8 mm/s de bajada) para arrastrar más solución y engrosar la película.
 INSERT INTO recipe_stages (recipe_id, stage_order, name, duration, temperature, velocity_x, velocity_y, accel_x, accel_y,
     humidity_offset, temperature_offset,
-    dipping_wait0, dipping_wait1, dipping_wait2, dipping_wait3, transfer_wait,
+    dipping_wait0, dipping_wait1, dipping_wait2, dipping_wait3, transfer_wait, transition_wait,
     cycles, fan, except_dripping1, except_dripping2, except_dripping3, except_dripping4,
     dip_start_position, dipping_length, transfer_speed, dip_speed, emersion_speed,
     pos_y1, pos_y2, pos_y3, pos_y4) VALUES
 -- Nucleación: 59.7 s por ciclo x 10 ciclos = 9.9 min -> 10
 (2, 1, 'Nucleación', 10, 25.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
-    10000, 5000, 10000, 5000, 1000,
+    10000, 5000, 10000, 5000, 1000, 0,
     10, false, false, false, false, false,
     0.0, 50.0, 20.0, 15.0, 15.0,
     0.0, 0.0, 0.0, 0.0),
 -- Crecimiento: 149.5 s por ciclo x 30 ciclos = 74.8 min -> 75
 (2, 2, 'Crecimiento', 75, 25.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
-    30000, 10000, 30000, 10000, 1500,
+    30000, 10000, 30000, 10000, 1500, 0,
     30, true, false, false, false, false,
     0.0, 50.0, 15.0, 8.0, 5.0,
     0.0, 0.0, 0.0, 0.0)
@@ -475,6 +488,7 @@ ON DUPLICATE KEY UPDATE
     dipping_wait2 = VALUES(dipping_wait2),
     dipping_wait3 = VALUES(dipping_wait3),
     transfer_wait = VALUES(transfer_wait),
+    transition_wait = VALUES(transition_wait),
     cycles = VALUES(cycles),
     fan = VALUES(fan),
     except_dripping1 = VALUES(except_dripping1),

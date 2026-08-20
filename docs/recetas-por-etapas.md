@@ -15,7 +15,7 @@ La funcionalidad necesita la tabla `recipe_stages` y la columna
 `recipes.is_staged`. En una base ya instalada se aplican con:
 
 ```bash
-mysql -u root -p silar_system < database/migration_add_recipe_stages.sql
+mysql -u root -p silar_system < database/003_recipe_stages.sql
 ```
 
 La migración es idempotente: comprueba si la columna existe antes de agregarla y

@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <title>Preview calibración</title>
+    <link href="css/bootstrap.min.css" rel="stylesheet">
+    <link href="css/bootstrap-icons.css" rel="stylesheet">
+    <link href="css/silar.css" rel="stylesheet">
+</head>
+<body class="p-4 bg-body-tertiary">
+    <div id="raiz"></div>
+
+    <script>
+        // Banco de pruebas de los paneles de calibración: monta la pantalla con
+        // datos falsos, sin Arduino ni sesión, para revisar maquetación y render.
+        window.confirmar = async () => true;
+    </script>
+    <script src="js/screens/configuration.js"></script>
+    <script>
+        const app = {
+            userSession: { role: 'admin' },
+            apiCall: async () => { throw new Error('sin Arduino en el banco de pruebas'); },
+            showError: (m) => console.log('showError', m),
+            showSuccess: (m) => console.log('showSuccess', m)
+        };
+
+        document.getElementById('raiz').innerHTML = ConfigurationScreen.getTemplate();
+
+        const pantalla = Object.create(ConfigurationScreen.prototype);
+        pantalla.app = app;
+        pantalla.config = {};
+        pantalla.configData = {};
+        pantalla.isAdmin = true;
+        pantalla.calZ = {
+            calibracion: { stepsPerMm: 20, homeHeightMm: 275, minHeightMm: 25, floorSteps: -5000 },
+            tamanoPaso: 1000,
+            pasosAcumulados: 2000,
+            puntos: [
+                { pasos: 0, alturaMM: 275 },
+                { pasos: 1000, alturaMM: 225 },
+                { pasos: 2000, alturaMM: 174.2 }
+            ],
+            ajuste: null,
+            ocupado: false
+        };
+        pantalla.calZ.ajuste = pantalla.calZAjustar();
+
+        pantalla.calY = {
+            calibracion: {
+                stepsPerMm: 76.3636,
+                vesselPositionsMm: [0, 55, 110, 165],
+                positions: [0, 4200, 8400, 12600],
+                axisLimitSteps: 16000,
+                maxSpeedMms: 40,
+                currentSteps: 4200
+            },
+            tamanoPaso: 1000,
+            pasosActuales: 4200,
+            puntos: [
+                { pasos: 0, distanciaMM: 12 },
+                { pasos: 1000, distanciaMM: 25.1 },
+                { pasos: 2000, distanciaMM: 38.2 }
+            ],
+            ajuste: null,
+            vasos: [0, 4200, 8400, null],
+            ocupado: false
+        };
+        pantalla.calY.ajuste = pantalla.calYAjustar();
+
+        pantalla.renderZCalibration();
+        pantalla.renderYCalibration();
+        window.pantalla = pantalla;
+        console.log('ajuste Z', pantalla.calZ.ajuste);
+        console.log('ajuste Y', pantalla.calY.ajuste);
+    </script>
+</body>
+</html>

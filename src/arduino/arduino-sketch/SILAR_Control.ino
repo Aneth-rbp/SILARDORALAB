@@ -2,6 +2,13 @@
 #include <ezButton.h>
 #include <EEPROM.h>
 
+// Version de este firmware. La aplicacion la pregunta con FW? al conectarse y
+// la compara con la del .hex que trae empaquetado: si no coinciden, ofrece
+// grabar la placa sola (ver src/firmware/). SUBIR ESTE NUMERO cada vez que se
+// cambie algo de este archivo que tenga que llegar a la maquina; si no se sube,
+// la placa se queda con el firmware viejo y nadie se entera.
+#define FIRMWARE_VERSION "3"
+
 /*
  * Sistema de Control SILAR - Motores Stepper   
  * Control de ejes Y y Z con límites y home
@@ -302,7 +309,15 @@ struct RecipeParams {
   int dippingWait1;
   int dippingWait2;
   int dippingWait3;
+  // Espera con el sustrato ya sobre el vaso, ANTES de bajarlo: pertenece a la
+  // inmersion, no al traslado. El nombre viene de cuando se creia que era el
+  // tiempo del movimiento en Y y se conserva por compatibilidad con el JSON.
   int transferWait;
+  // Espera DESPUES de sacar el sustrato de la solucion y antes de moverse al
+  // vaso siguiente: es el escurrido/secado entre baños, la transicion de
+  // verdad. 0 = sin espera, que es como corria el equipo antes de que este
+  // campo existiera.
+  int transitionWait;
   bool exceptDripping1;
   bool exceptDripping2;
   bool exceptDripping3;
@@ -558,6 +573,11 @@ void procesarCalibracionY(String args) {
   enviarCalibracionY();
 }
 
+void enviarVersionFirmware() {
+  Serial.print("FIRMWARE:");
+  Serial.println(FIRMWARE_VERSION);
+}
+
 void setup() {
   Serial.begin(9600);
 
@@ -621,6 +641,7 @@ void setup() {
   emergencySwitch.setDebounceTime(50);
   
   Serial.println("Sistema SILAR Iniciado");
+  enviarVersionFirmware();
   Serial.println("Hardware: Arduino Mega 2560 Rev3");
   Serial.println("Documento: MOC-ELEC-001");
 
@@ -846,6 +867,12 @@ void loop() {
     else if (comando.startsWith("GOTO_MM:")) {
       moverEjeZaAltura(comando.substring(8).toFloat());
     }
+    // La aplicacion lo pregunta al conectarse para saber si la placa se quedo
+    // con un firmware viejo. Un firmware anterior a esto no responde: ese
+    // silencio tambien es una respuesta -es viejo por definicion-.
+    else if (comando == "FW?") {
+      enviarVersionFirmware();
+    }
     else {
       Serial.print("Error: Comando desconocido: ");
       Serial.println(comando);
@@ -864,6 +891,7 @@ void parsearParametrosReceta(String json) {
   recipeParams.dippingWait2 = 5000;
   recipeParams.dippingWait3 = 5000;
   recipeParams.transferWait = 2000;
+  recipeParams.transitionWait = 0;   // 0 = sin escurrido, comportamiento anterior
   recipeParams.exceptDripping1 = false;
   recipeParams.exceptDripping2 = false;
   recipeParams.exceptDripping3 = false;
@@ -943,6 +971,17 @@ void parsearParametrosReceta(String json) {
     if (end < 0) end = json.indexOf("}", start);
     if (end > start) {
        recipeParams.transferWait = json.substring(start, end).toInt();
+    }
+  }
+
+  // Transition wait (escurrido tras la emersion)
+  idx = json.indexOf("\"transitionWait\":");
+  if (idx >= 0) {
+    int start = idx + 17;
+    int end = json.indexOf(",", start);
+    if (end < 0) end = json.indexOf("}", start);
+    if (end > start) {
+       recipeParams.transitionWait = json.substring(start, end).toInt();
     }
   }
   
@@ -1061,6 +1100,10 @@ void parsearParametrosReceta(String json) {
   Serial.print(recipeParams.dippingWait2);
   Serial.print(", Wait3=");
   Serial.print(recipeParams.dippingWait3);
+  Serial.print(", PrevInmersion=");
+  Serial.print(recipeParams.transferWait);
+  Serial.print(", Transicion=");
+  Serial.print(recipeParams.transitionWait);
   Serial.print(", DipStart=");
   Serial.print(recipeParams.dipStartPosition, 1);
   Serial.print("mm/");
@@ -1273,6 +1316,10 @@ void ejecutarProcesoAutomatico() {
   }
   
   if (!esperarSiPausado()) return;
+
+  // El ciclo cierra donde abrio: se vuelve al primer vaso antes de darlo por
+  // terminado, en vez de dejar el sustrato colgado sobre el ultimo.
+  if (!regresarAlPrimerVasoDelCiclo()) return;
   
   Serial.print("CICLO_COMPLETADO: ");
   Serial.print(cicloActual + 1);
@@ -1289,6 +1336,56 @@ void ejecutarProcesoAutomatico() {
   }
 }
 
+// Espera atendiendo pausas y paros. El tiempo se cuenta en reloj de pared a
+// proposito: el sustrato sigue sumergido (o escurriendo) durante una pausa, asi
+// que ese rato cuenta igual. Devuelve false si llego un STOP o un paro de
+// emergencia y hay que abandonar la inmersion.
+bool esperarConPausa(unsigned long duracionMs) {
+  unsigned long tiempoInicio = millis();
+  while (millis() - tiempoInicio < duracionMs) {
+    if (!esperarSiPausado()) return false;
+    delay(100); // Verificar cada 100ms
+  }
+  return esperarSiPausado();
+}
+
+// Vaso en el que empieza cada ciclo (0..3), o -1 si la receta no moja ninguno.
+// No siempre es el vaso 1: con "excepto" marcado en los primeros, el ciclo
+// arranca en el primero que si se usa.
+int primerVasoDelCiclo() {
+  if (!recipeParams.exceptDripping1) return 0;
+  if (!recipeParams.exceptDripping2) return 1;
+  if (!recipeParams.exceptDripping3) return 2;
+  if (!recipeParams.exceptDripping4) return 3;
+  return -1;
+}
+
+// Devuelve Y al vaso donde empieza el ciclo, al cerrarlo.
+//
+// Ese viaje ya se hacia antes, pero al principio del ciclo siguiente, asi que
+// el ultimo ciclo de la receta terminaba con el sustrato sobre el ultimo vaso.
+// Haciendolo aqui la receta acaba en el mismo punto en el que arranco: el
+// recorrido total del eje es el mismo, solo cambia cuando ocurre.
+//
+// Se hace despues de la espera de transicion de la ultima inmersion, con el
+// sustrato ya escurrido, para no ir goteando sobre los vasos del camino.
+//
+// Devuelve false si durante el regreso llego un STOP o un paro de emergencia.
+bool regresarAlPrimerVasoDelCiclo() {
+  int primero = primerVasoDelCiclo();
+  if (primero < 0) return true;   // receta sin inmersiones: no hay a donde volver
+
+  long objetivo = posicionVasoPasos(primero);
+  if (objetivo == posY) return true;   // un solo vaso: ya se termino donde se empezo
+
+  if (!esperarSiPausado()) return false;
+
+  Serial.println("REGRESO_A_INICIO_CICLO");
+  moverEjeYAbsoluto(objetivo);
+
+  return esperarSiPausado();
+}
+
 void ejecutarInmersion(long posYTarget, int tiempoEspera, int numInmersion) {
   if (!esperarSiPausado()) {
     return;
@@ -1302,10 +1399,9 @@ void ejecutarInmersion(long posYTarget, int tiempoEspera, int numInmersion) {
   
   if (!esperarSiPausado()) return;
   
-  // Esperar tiempo de transferencia
-  delay(recipeParams.transferWait);
-  
-  if (!esperarSiPausado()) return;
+  // Espera con el sustrato ya sobre el vaso y antes de bajarlo: es la previa de
+  // la inmersion, no el traslado en Y (ese ya termino en moverEjeYAbsoluto).
+  if (!esperarConPausa(recipeParams.transferWait)) return;
   
   long zAntesDeBajar = posZ;
   long bajadaReal = mmAPasosZ(recipeParams.dippingLength);
@@ -1332,23 +1428,18 @@ void ejecutarInmersion(long posYTarget, int tiempoEspera, int numInmersion) {
   if (!esperarSiPausado()) return;
   
   // Esperar tiempo de inmersión
-  // El tiempo se cuenta en reloj de pared a proposito: durante una pausa el
-  // sustrato sigue sumergido, asi que ese rato cuenta como inmersion.
-  unsigned long tiempoInicio = millis();
-  while (millis() - tiempoInicio < tiempoEspera) {
-    if (!esperarSiPausado()) {
-      return;
-    }
-    delay(100); // Verificar cada 100ms
-  }
-  
-  if (!esperarSiPausado()) return;
+  if (!esperarConPausa(tiempoEspera)) return;
   
   // Subir EXACTAMENTE lo que realmente bajó, leyendo la posición real en vez de
   // la solicitada: si el límite virtual o un switch recortó el descenso, esto
   // evita subir de más y chocar arriba.
   moverEjeZVelocidad(zAntesDeBajar - posZ, microsEmersion);
-  
+
+  // Transicion: el sustrato ya salio de la solucion y escurre en el aire antes
+  // de viajar al vaso siguiente. Va aqui y no al principio de la inmersion
+  // siguiente para que tambien se respete tras la ultima inmersion del ciclo.
+  if (!esperarConPausa(recipeParams.transitionWait)) return;
+
   Serial.print("INMERSION_COMPLETADA: Y");
   Serial.println(numInmersion);
 }
@@ -1696,8 +1787,8 @@ void moverEjeY(long pasos) {
   // se pasa a pasos/s directamente, sin dar el rodeo por microsegundos, porque
   // AccelStepper ya trabaja en pasos/s. En manual se usa la velocidad máxima,
   // para que el jog no dependa de la última receta cargada.
-  // Esta misma velocidad rige el regreso de Y4 a Y1 entre ciclos: ese tramo no es
-  // un movimiento aparte, es la primera inmersión del ciclo siguiente.
+  // Esta misma velocidad rige el regreso al primer vaso con el que cierra cada
+  // ciclo (regresarAlPrimerVasoDelCiclo): sigue siendo traslado de receta.
   float velocidadY = MAX_SPEED_Y;
   if (procesoActivo) {
     velocidadY = recipeParams.transferSpeedMMs * PASOS_POR_MM_Y;

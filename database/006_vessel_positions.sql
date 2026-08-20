@@ -18,7 +18,7 @@
 -- sale la misma posición por los dos caminos.
 -- =====================================================
 
-SET @exist_pos_y1 := (SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = 'silar_db' AND TABLE_NAME = 'recipe_parameters' AND COLUMN_NAME = 'pos_y1');
+SET @exist_pos_y1 := (SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'recipe_parameters' AND COLUMN_NAME = 'pos_y1');
 
 SET @sql_pos_y1 = IF(@exist_pos_y1 = 0,
     'ALTER TABLE recipe_parameters ADD COLUMN pos_y1 DECIMAL(8,2) DEFAULT 0.0 COMMENT ''Posición del vaso 1 desde el home de Y, en mm (0 = geometría de la máquina)'' AFTER dip_speed',

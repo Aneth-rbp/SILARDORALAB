@@ -35,7 +35,7 @@ class RecipesScreen {
     // etapas. El resto son decimales (mm, mm/s, °C).
     static STAGE_INT_FIELDS = new Set([
         'dippingWait0', 'dippingWait1', 'dippingWait2', 'dippingWait3',
-        'transferWait', 'cycles'
+        'transferWait', 'transitionWait', 'cycles'
     ]);
 
     constructor(app) {
@@ -471,7 +471,8 @@ class RecipesScreen {
                     ['Inmersión 2', `${params.dippingWait1 || '--'} ms`],
                     ['Inmersión 3', `${params.dippingWait2 || '--'} ms`],
                     ['Inmersión 4', `${params.dippingWait3 || '--'} ms`],
-                    ['Transferencia Y', `${params.transferWait || '--'} ms`],
+                    ['Previa a inmersión', `${params.transferWait || '--'} ms`],
+                    ['Transición', `${params.transitionWait || '--'} ms`],
                     ['Excluir inmersiones', inmersionesExcluidas]
                 ]
             },
@@ -642,6 +643,7 @@ class RecipesScreen {
             form.querySelector('#recipe-dipping-wait2').value = params.dippingWait2 || '';
             form.querySelector('#recipe-dipping-wait3').value = params.dippingWait3 || '';
             form.querySelector('#recipe-transfer-wait').value = params.transferWait || '';
+            form.querySelector('#recipe-transition-wait').value = params.transitionWait || '';
             // Parámetros de proceso
             form.querySelector('#recipe-cycles').value = params.cycles || 1;
             form.querySelector('#recipe-fan').value = params.fan ? 'true' : 'false';
@@ -755,7 +757,8 @@ class RecipesScreen {
         // Lista de IDs que afectan a la duración
         const triggerIds = [
             'recipe-dipping-wait0', 'recipe-dipping-wait1', 'recipe-dipping-wait2', 'recipe-dipping-wait3',
-            'recipe-transfer-wait', 'recipe-cycles', 'recipe-dip-speed', 'recipe-emersion-speed',
+            'recipe-transfer-wait', 'recipe-transition-wait',
+            'recipe-cycles', 'recipe-dip-speed', 'recipe-emersion-speed',
             'recipe-dipping-length'
         ];
 
@@ -799,6 +802,7 @@ class RecipesScreen {
         const dippingWait2 = parseInt(form.querySelector('#recipe-dipping-wait2').value) || 0;
         const dippingWait3 = parseInt(form.querySelector('#recipe-dipping-wait3').value) || 0;
         const transferWait = parseInt(form.querySelector('#recipe-transfer-wait').value) || 0;
+        const transitionWait = parseInt(form.querySelector('#recipe-transition-wait').value) || 0;
         const cycles = parseInt(form.querySelector('#recipe-cycles').value) || 1;
         
         // Tiempo de movimiento (estimado)
@@ -815,7 +819,8 @@ class RecipesScreen {
         // Suma de tiempos por ciclo
         const timePerCycleMs = (
             dippingWait0 + dippingWait1 + dippingWait2 + dippingWait3 + 
-            (transferWait * 3) + // 3 transferencias entre vasos
+            (transferWait * 4) +   // una espera sobre el vaso antes de cada inmersión
+            (transitionWait * 4) + // un escurrido después de cada emersión
             (movementTimePerDipMs * 4) // 4 inmersiones por ciclo
         );
         
@@ -873,14 +878,15 @@ class RecipesScreen {
     static stageFieldGroups() {
         return [
             {
-                title: 'Tiempos de Inmersión (ms)',
+                title: 'Tiempos del Ciclo (ms)',
                 icon: 'bi-clock-history',
                 fields: [
                     { key: 'dippingWait0', label: 'Inmersión 1', min: 0, step: 100 },
                     { key: 'dippingWait1', label: 'Inmersión 2', min: 0, step: 100 },
                     { key: 'dippingWait2', label: 'Inmersión 3', min: 0, step: 100 },
                     { key: 'dippingWait3', label: 'Inmersión 4', min: 0, step: 100 },
-                    { key: 'transferWait', label: 'Espera Transferencia Y', min: 0, step: 100 }
+                    { key: 'transferWait', label: 'Espera antes de Inmersión', min: 0, step: 100 },
+                    { key: 'transitionWait', label: 'Espera de Transición', min: 0, step: 100 }
                 ]
             },
             {
@@ -967,8 +973,9 @@ class RecipesScreen {
             (parseInt(p.dippingWait1) || 0) +
             (parseInt(p.dippingWait2) || 0) +
             (parseInt(p.dippingWait3) || 0) +
-            ((parseInt(p.transferWait) || 0) * 3) + // 3 transferencias entre vasos
-            (movementTimePerDipMs * 4)              // 4 inmersiones por ciclo
+            ((parseInt(p.transferWait) || 0) * 4) +   // espera sobre el vaso antes de cada inmersión
+            ((parseInt(p.transitionWait) || 0) * 4) + // escurrido después de cada emersión
+            (movementTimePerDipMs * 4)               // 4 inmersiones por ciclo
         );
 
         return timePerCycleMs * (parseInt(p.cycles) || 1);
@@ -1443,6 +1450,7 @@ class RecipesScreen {
                 dippingWait2: parseInt(formData.get('dippingWait2')) || 0,
                 dippingWait3: parseInt(formData.get('dippingWait3')) || 0,
                 transferWait: parseInt(formData.get('transferWait')) || 0,
+                transitionWait: parseInt(formData.get('transitionWait')) || 0,
                 // Parámetros de proceso
                 cycles: parseInt(formData.get('cycles')) || 1,
                 fan: formData.get('fan') === 'true',
@@ -1920,7 +1928,7 @@ class RecipesScreen {
                                       <div class="col-12">
                                           <hr class="my-3">
                                           <h6 class="fw-bold text-primary">
-                                              <i class="bi bi-clock-history me-2"></i>Tiempos de Inmersión (ms)
+                                              <i class="bi bi-clock-history me-2"></i>Tiempos del Ciclo (ms)
                                           </h6>
                                       </div>
                                       <div class="col-md-6">
@@ -1940,8 +1948,14 @@ class RecipesScreen {
                                           <input type="number" class="form-control" name="dippingWait3" id="recipe-dipping-wait3" min="0" step="100">
                                       </div>
                                       <div class="col-md-6">
-                                          <label class="form-label">Tiempo de Espera Transferencia Y (ms)</label>
-                                          <input type="number" class="form-control" name="transferWait" id="recipe-transfer-wait" min="0" step="100">
+                                          <label class="form-label">Espera antes de Inmersión (ms)</label>
+                                          <input type="number" class="form-control" name="transferWait" id="recipe-transfer-wait" min="0" step="100"
+                                                 title="Con el sustrato ya sobre el vaso y antes de bajarlo. No es el traslado en Y: ese ya terminó.">
+                                      </div>
+                                      <div class="col-md-6">
+                                          <label class="form-label">Espera de Transición (ms)</label>
+                                          <input type="number" class="form-control" name="transitionWait" id="recipe-transition-wait" min="0" step="100"
+                                                 title="Escurrido: tras sacar el sustrato de la solución y antes de viajar al vaso siguiente.">
                                       </div>
                                     
                                       <!-- Parámetros de Proceso -->

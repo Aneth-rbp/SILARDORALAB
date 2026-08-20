@@ -18,7 +18,8 @@ const validator = require('./src/utils/validator');
 // Importar controlador de Arduino
 const { getInstance } = require('./src/arduino/ArduinoController');
 const { ArduinoController } = require('./src/arduino/ArduinoController');
-// const { getInstance: getFlasherInstance } = require('./src/arduino/flasher/ArduinoFlasher'); // Comentado - módulo no disponible
+const actualizadorFirmware = require('./src/firmware/actualizador');
+const migraciones = require('./src/database/migraciones');
 
 class SilarWebServer {
   // Mismo tope que MAX_ETAPAS en el firmware. Si aquí fuera mayor, la receta se
@@ -265,11 +266,15 @@ class SilarWebServer {
     app.put('/api/arduino/calibration/y', this.authenticateToken.bind(this), this.updateYCalibration.bind(this));
     app.post('/api/arduino/calibration/y/save', this.authenticateToken.bind(this), this.saveYCalibration.bind(this));
     app.post('/api/arduino/calibration/y/reset', this.authenticateToken.bind(this), this.resetYCalibration.bind(this));
+    app.post('/api/arduino/calibration/y/jog', this.authenticateToken.bind(this), this.jogYCalibration.bind(this));
+    app.post('/api/arduino/calibration/y/home', this.authenticateToken.bind(this), this.homeYCalibration.bind(this));
 
-    // Rutas API Flash Arduino
-    app.get('/api/arduino/flash/info', this.getFlashInfo.bind(this));
-    app.post('/api/arduino/flash', this.flashArduino.bind(this));
-    app.get('/api/arduino/flash/verify', this.verifyFirmware.bind(this));
+    // Rutas API Flash Arduino. Grabar la placa la reinicia, asi que pide sesion;
+    // no se exige rol de administrador para que el operador de turno pueda
+    // actualizar el firmware al abrir el sistema sin depender de nadie.
+    app.get('/api/arduino/flash/info', this.authenticateToken.bind(this), this.getFlashInfo.bind(this));
+    app.post('/api/arduino/flash', this.authenticateToken.bind(this), this.flashArduino.bind(this));
+    app.get('/api/arduino/flash/verify', this.authenticateToken.bind(this), this.verifyFirmware.bind(this));
 
     // Middleware de manejo de errores
     app.use(errorHandler.middleware());
@@ -928,6 +933,7 @@ class SilarWebServer {
       dippingWait2: Number(row.dipping_wait2) || 0,
       dippingWait3: Number(row.dipping_wait3) || 0,
       transferWait: Number(row.transfer_wait) || 0,
+      transitionWait: Number(row.transition_wait) || 0,
       cycles: Number(row.cycles) || 1,
       fan: !!row.fan,
       exceptDripping1: !!row.except_dripping1,
@@ -996,6 +1002,7 @@ class SilarWebServer {
       etapa?.dippingWait2 || 0,
       etapa?.dippingWait3 || 0,
       etapa?.transferWait || 0,
+      etapa?.transitionWait || 0,
       etapa?.cycles || 1,
       etapa?.fan ? 1 : 0,
       etapa?.exceptDripping1 ? 1 : 0,
@@ -1026,11 +1033,11 @@ class SilarWebServer {
 
     const columnas = `recipe_id, stage_order, name, duration, temperature, velocity_x, velocity_y,
        accel_x, accel_y, humidity_offset, temperature_offset,
-       dipping_wait0, dipping_wait1, dipping_wait2, dipping_wait3, transfer_wait,
+       dipping_wait0, dipping_wait1, dipping_wait2, dipping_wait3, transfer_wait, transition_wait,
        cycles, fan, except_dripping1, except_dripping2, except_dripping3, except_dripping4,
        dip_start_position, dipping_length, transfer_speed, dip_speed, emersion_speed,
        pos_y1, pos_y2, pos_y3, pos_y4`;
-    const marcadores = new Array(31).fill('?').join(', ');
+    const marcadores = new Array(32).fill('?').join(', ');
 
     for (let i = 0; i < etapas.length; i++) {
       await this.dbConnection.execute(
@@ -1109,7 +1116,7 @@ class SilarWebServer {
           SELECT r.*, u.full_name as created_by_name, u.role as creator_role,
                  rp.duration, rp.temperature, rp.velocity_x, rp.velocity_y,
                  rp.accel_x, rp.accel_y, rp.humidity_offset, rp.temperature_offset,
-                 rp.dipping_wait0, rp.dipping_wait1, rp.dipping_wait2, rp.dipping_wait3, rp.transfer_wait,
+                 rp.dipping_wait0, rp.dipping_wait1, rp.dipping_wait2, rp.dipping_wait3, rp.transfer_wait, rp.transition_wait,
                  rp.cycles, rp.fan, rp.except_dripping1, rp.except_dripping2, rp.except_dripping3, rp.except_dripping4,
                  rp.dip_start_position, rp.dipping_length, rp.transfer_speed, rp.dip_speed, rp.emersion_speed,
                  rp.pos_y1, rp.pos_y2, rp.pos_y3, rp.pos_y4
@@ -1125,7 +1132,7 @@ class SilarWebServer {
           SELECT r.*, u.full_name as created_by_name, u.role as creator_role,
                  rp.duration, rp.temperature, rp.velocity_x, rp.velocity_y,
                  rp.accel_x, rp.accel_y, rp.humidity_offset, rp.temperature_offset,
-                 rp.dipping_wait0, rp.dipping_wait1, rp.dipping_wait2, rp.dipping_wait3, rp.transfer_wait,
+                 rp.dipping_wait0, rp.dipping_wait1, rp.dipping_wait2, rp.dipping_wait3, rp.transfer_wait, rp.transition_wait,
                  rp.cycles, rp.fan, rp.except_dripping1, rp.except_dripping2, rp.except_dripping3, rp.except_dripping4,
                  rp.dip_start_position, rp.dipping_length, rp.transfer_speed, rp.dip_speed, rp.emersion_speed,
                  rp.pos_y1, rp.pos_y2, rp.pos_y3, rp.pos_y4
@@ -1160,6 +1167,7 @@ class SilarWebServer {
           dippingWait2: row.dipping_wait2 || 0,
           dippingWait3: row.dipping_wait3 || 0,
           transferWait: row.transfer_wait || 0,
+          transitionWait: row.transition_wait || 0,
           // Parámetros de proceso
           cycles: row.cycles || 1,
           fan: row.fan || false,
@@ -1285,11 +1293,11 @@ class SilarWebServer {
         await this.dbConnection.execute(
           `INSERT INTO recipe_parameters 
            (recipe_id, duration, temperature, velocity_x, velocity_y, accel_x, accel_y, humidity_offset, temperature_offset,
-            dipping_wait0, dipping_wait1, dipping_wait2, dipping_wait3, transfer_wait,
+            dipping_wait0, dipping_wait1, dipping_wait2, dipping_wait3, transfer_wait, transition_wait,
             cycles, fan, except_dripping1, except_dripping2, except_dripping3, except_dripping4,
             dip_start_position, dipping_length, transfer_speed, dip_speed, emersion_speed,
             pos_y1, pos_y2, pos_y3, pos_y4)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
           [
             recipeId,
             parameters?.duration || 0,
@@ -1306,6 +1314,7 @@ class SilarWebServer {
             parameters?.dippingWait2 || 0,
             parameters?.dippingWait3 || 0,
             parameters?.transferWait || 0,
+            parameters?.transitionWait || 0,
             // Parámetros de proceso
             parameters?.cycles || 1,
             fanValue,
@@ -1472,6 +1481,7 @@ class SilarWebServer {
           parameters?.dippingWait2 || 0,
           parameters?.dippingWait3 || 0,
           parameters?.transferWait || 0,
+          parameters?.transitionWait || 0,
           // Parámetros de proceso
           parameters?.cycles || 1,
           fanValue,
@@ -1494,7 +1504,7 @@ class SilarWebServer {
 
         // Log para depuración
         logger.debug(`Actualizando parámetros de receta ${recipeId}`, {
-          columnCount: 29,
+          columnCount: 30,
           valueCount: paramsArray.length,
           params: paramsArray
         });
@@ -1502,11 +1512,11 @@ class SilarWebServer {
         await this.dbConnection.execute(
           `INSERT INTO recipe_parameters 
            (recipe_id, duration, temperature, velocity_x, velocity_y, accel_x, accel_y, humidity_offset, temperature_offset,
-            dipping_wait0, dipping_wait1, dipping_wait2, dipping_wait3, transfer_wait,
+            dipping_wait0, dipping_wait1, dipping_wait2, dipping_wait3, transfer_wait, transition_wait,
             cycles, fan, except_dripping1, except_dripping2, except_dripping3, except_dripping4,
             dip_start_position, dipping_length, transfer_speed, dip_speed, emersion_speed,
             pos_y1, pos_y2, pos_y3, pos_y4)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
            ON DUPLICATE KEY UPDATE
            duration = VALUES(duration),
            temperature = VALUES(temperature),
@@ -1521,6 +1531,7 @@ class SilarWebServer {
            dipping_wait2 = VALUES(dipping_wait2),
            dipping_wait3 = VALUES(dipping_wait3),
            transfer_wait = VALUES(transfer_wait),
+           transition_wait = VALUES(transition_wait),
            cycles = VALUES(cycles),
            fan = VALUES(fan),
            except_dripping1 = VALUES(except_dripping1),
@@ -1999,6 +2010,33 @@ class SilarWebServer {
     }
   }
 
+  async jogYCalibration(req, res) {
+    if (!this.guardCalibration(req, res)) return;
+
+    try {
+      const result = await this.arduinoController.jogYSteps(req.body?.steps);
+      res.json({ success: true, result });
+    } catch (error) {
+      logger.error('Error en jog de calibración de Y:', error);
+      res.status(500).json({ success: false, message: error.message });
+    }
+  }
+
+  // El home de la máquina lleva los dos ejes a su final de carrera, así que
+  // sirve igual para arrancar el asistente de Y que el de Z. Se expone con las
+  // dos rutas para no obligar a la pantalla a saber ese detalle.
+  async homeYCalibration(req, res) {
+    if (!this.guardCalibration(req, res)) return;
+
+    try {
+      const result = await this.arduinoController.executeHome();
+      res.json({ success: true, result });
+    } catch (error) {
+      logger.error('Error ejecutando home desde calibración de Y:', error);
+      res.status(500).json({ success: false, message: error.message });
+    }
+  }
+
   async jogZCalibration(req, res) {
     if (!this.guardCalibration(req, res)) return;
 
@@ -2023,36 +2061,150 @@ class SilarWebServer {
     }
   }
 
+  /**
+   * Estado del firmware: que version trae el instalador, que version tiene la
+   * placa y si hay que grabarla. Lo consulta la aplicación al arrancar.
+   */
   async getFlashInfo(req, res) {
-    // Funcionalidad de flash no disponible - flasher module no incluido
-    res.json({
-      success: false,
-      message: 'Funcionalidad de flash automático no disponible. Flashea el Arduino manualmente usando Arduino IDE.',
-      flashSystem: {
-        available: false,
-        arduinoCliInstalled: false
+    try {
+      const empaquetada = actualizadorFirmware.versionEmpaquetada();
+
+      if (!empaquetada) {
+        return res.json({
+          success: true,
+          disponible: false,
+          message: 'Esta versión no trae firmware empaquetado'
+        });
       }
-    });
+
+      if (!this.arduinoController?.isConnected) {
+        return res.json({
+          success: true,
+          disponible: true,
+          conectado: false,
+          versionEmpaquetada: empaquetada,
+          necesitaActualizar: false,
+          message: 'Arduino no conectado'
+        });
+      }
+
+      // Si ya se sabe de cuando arrancó la placa, no se le vuelve a preguntar:
+      // el firmware la anuncia solo al iniciar.
+      const versionPlaca = this.arduinoController.firmwareVersion
+        ?? await this.arduinoController.consultarVersionFirmware();
+
+      res.json({
+        success: true,
+        disponible: true,
+        conectado: true,
+        puerto: this.arduinoController.portPath,
+        versionEmpaquetada: empaquetada,
+        versionPlaca,
+        necesitaActualizar: actualizadorFirmware.necesitaActualizar(versionPlaca)
+      });
+    } catch (error) {
+      logger.error('Error consultando el firmware:', error);
+      res.status(500).json({ success: false, message: error.message });
+    }
   }
 
+  /**
+   * Graba el firmware empaquetado en la placa.
+   *
+   * Suelta el puerto, corre avrdude y lo vuelve a tomar. Si algo falla, el
+   * bootloader sigue intacto y se puede reintentar desde aquí mismo: la placa
+   * queda sin sketch, pero no hace falta que nadie vaya al laboratorio.
+   */
   async flashArduino(req, res) {
-    // Funcionalidad de flash no disponible - flasher module no incluido
-    logger.warn('Intento de flashear Arduino - funcionalidad no disponible');
+    if (!actualizadorFirmware.hayFirmwareEmpaquetado()) {
+      return res.status(501).json({
+        success: false,
+        message: 'Esta versión no trae firmware empaquetado'
+      });
+    }
 
-    res.status(501).json({
-      success: false,
-      message: 'Funcionalidad de flash automático no disponible.',
-      instructions: 'Para flashear el Arduino manualmente: 1) Abre Arduino IDE, 2) Abre src/arduino/arduino-sketch/SILAR_Control.ino, 3) Selecciona tu placa, 4) Haz clic en Upload'
-    });
+    if (!this.arduinoController?.isConnected) {
+      return res.status(503).json({ success: false, message: 'Arduino no conectado' });
+    }
+
+    // Grabar reinicia la placa: a media receta el experimento se pierde y los
+    // motores se quedan donde estén.
+    if (await this.hayProcesoEnCurso()) {
+      return res.status(409).json({
+        success: false,
+        message: 'Hay un proceso en curso. Espere a que termine para actualizar el firmware.'
+      });
+    }
+
+    const puerto = this.arduinoController.portPath;
+
+    try {
+      await this.arduinoController.liberarPuertoParaGrabar();
+
+      const resultado = await actualizadorFirmware.grabar(puerto, (linea) => {
+        this.io?.emit('firmware-progreso', { linea });
+      });
+
+      await this.arduinoController.retomarPuertoTrasGrabar(puerto);
+      const versionPlaca = await this.arduinoController.consultarVersionFirmware();
+
+      res.json({
+        success: true,
+        versionPlaca,
+        versionEsperada: resultado.version,
+        verificado: versionPlaca === resultado.version
+      });
+    } catch (error) {
+      logger.error('Error grabando el firmware:', error);
+
+      // Pase lo que pase hay que devolverle el puerto a la aplicación, aunque la
+      // placa haya quedado a medias: es la única forma de reintentar.
+      // Si el fallo fue justamente al reabrir el puerto, no se insiste aqui: la
+      // reconexion automatica del controlador sigue trabajando por su cuenta.
+      if (!this.arduinoController.isConnected) {
+        await this.arduinoController.retomarPuertoTrasGrabar(puerto).catch((fallo) => {
+          logger.error('No se pudo recuperar el puerto tras el fallo:', fallo.message);
+        });
+      }
+
+      res.status(500).json({ success: false, message: error.message });
+    }
   }
 
   async verifyFirmware(req, res) {
-    // Funcionalidad de verificación no disponible - flasher module no incluido
-    res.json({
-      success: false,
-      message: 'Funcionalidad de verificación automática no disponible. Verifica manualmente que el Arduino responda correctamente.',
-      hasCorrectFirmware: null
-    });
+    try {
+      const empaquetada = actualizadorFirmware.versionEmpaquetada();
+      const versionPlaca = await this.arduinoController?.consultarVersionFirmware();
+
+      res.json({
+        success: true,
+        versionPlaca,
+        versionEmpaquetada: empaquetada,
+        hasCorrectFirmware: Boolean(empaquetada) && versionPlaca === empaquetada
+      });
+    } catch (error) {
+      logger.error('Error verificando el firmware:', error);
+      res.status(500).json({ success: false, message: error.message });
+    }
+  }
+
+  /**
+   * Igual que /api/system/busy: sin base de datos no hay proceso que proteger.
+   */
+  async hayProcesoEnCurso() {
+    if (!this.dbConnection) return false;
+
+    try {
+      await this.ensureDatabaseConnection();
+      const [rows] = await this.dbConnection.execute(
+        `SELECT COUNT(*) AS total FROM processes WHERE status IN ('running', 'paused')`
+      );
+      return rows[0].total > 0;
+    } catch (error) {
+      logger.error('Error consultando procesos en curso:', error);
+      // Ante la duda, se considera ocupado: no grabar de más es lo barato.
+      return true;
+    }
   }
 
   delay(ms) {
@@ -2288,6 +2440,7 @@ class SilarWebServer {
         dippingWait2: Number(recipe.dipping_wait2) || 0,
         dippingWait3: Number(recipe.dipping_wait3) || 0,
         transferWait: Number(recipe.transfer_wait) || 0,
+        transitionWait: Number(recipe.transition_wait) || 0,
         cycles: Number(recipe.cycles) || 1,
         fan: recipe.fan || false,
         exceptDripping1: recipe.except_dripping1 || false,
@@ -3048,6 +3201,14 @@ class SilarWebServer {
     } catch (dbError) {
       logger.error('Error crítico: No se pudo conectar a la base de datos al arrancar el servidor:', dbError);
     }
+
+    // Poner la base al día antes de tocar nada más. La aplicación se actualiza
+    // sola en el laboratorio y allí no hay nadie para correr los .sql a mano,
+    // así que el arranque siguiente a una actualización es el único momento en
+    // el que esto puede pasar. Va antes de adoptar procesos y de hablar con el
+    // Arduino porque ambos leen recetas, y una receta a la que le falta una
+    // columna nueva se lee mal.
+    await migraciones.aplicarPendientes(this.dbConnection);
 
     await this.adoptarProcesosHuerfanos();
 

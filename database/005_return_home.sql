@@ -12,7 +12,7 @@
 -- hasta ahora y se quedan donde terminaron.
 -- =====================================================
 
-SET @exist_return_home := (SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = 'silar_db' AND TABLE_NAME = 'recipes' AND COLUMN_NAME = 'return_home_at_end');
+SET @exist_return_home := (SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'recipes' AND COLUMN_NAME = 'return_home_at_end');
 
 SET @sql_return_home = IF(@exist_return_home = 0,
     'ALTER TABLE recipes ADD COLUMN return_home_at_end BOOLEAN DEFAULT false COMMENT ''Ejecutar HOME automáticamente al completar la receta'' AFTER is_staged',

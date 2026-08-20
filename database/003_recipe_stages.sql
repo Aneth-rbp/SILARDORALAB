@@ -16,7 +16,7 @@
 -- =====================================================
 
 -- 1. Marca de tipo en recipes
-SET @exist_is_staged := (SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = 'silar_db' AND TABLE_NAME = 'recipes' AND COLUMN_NAME = 'is_staged');
+SET @exist_is_staged := (SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'recipes' AND COLUMN_NAME = 'is_staged');
 
 SET @sql_is_staged = IF(@exist_is_staged = 0,
     'ALTER TABLE recipes ADD COLUMN is_staged BOOLEAN DEFAULT false COMMENT ''true = receta por etapas: su secuencia vive en recipe_stages'' AFTER is_active',

@@ -15,9 +15,8 @@
     "install-deps": "npm install",
     "lint": "eslint src/",
     "test": "echo \"No tests specified\" && exit 0",
-    "flash-arduino": "node src/arduino/flasher/flash-arduino.js",
-    "arduino-test": "node src/arduino/examples/integration-test.js",
-    "arduino-cli-install": "src\\arduino\\flasher\\install-arduino-cli.bat"
+    "compilar-firmware": "node scripts/compilar-firmware.js",
+    "arduino-test": "node src/arduino/examples/integration-test.js"
   },
   "keywords": [
     "silar",
@@ -54,6 +53,18 @@
       "config/**/*",
       "node_modules/**/*",
       "setup-database.bat"
+    ],
+    "extraResources": [
+      {
+        "//": "Lo que deja scripts/compilar-firmware.js. Solo estos tres: el resto de firmware-build son las herramientas de compilacion, cientos de MB.",
+        "from": "firmware-build",
+        "to": "firmware",
+        "filter": [
+          "firmware.json",
+          "SILAR_Control.ino.hex",
+          "avrdude/**"
+        ]
+      }
     ],
     "win": {
       "target": "nsis",
