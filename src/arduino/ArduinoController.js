@@ -11,6 +11,11 @@ const logger = require('../utils/logger');
 const { ARDUINO_COMMANDS, ARDUINO_RESPONSES } = require('./commands');
 const ResponseParser = require('./parser');
 
+// Por debajo de esto la placa esta en riesgo de quedarse sin memoria para
+// leer comandos. El Mega tiene 8 KB y el firmware deja ~6.4 KB libres al
+// arrancar, asi que llegar aqui significa que algo se esta comiendo la RAM.
+const MEMORIA_MINIMA_BYTES = 1024;
+
 class ArduinoController extends EventEmitter {
     constructor() {
         super();
@@ -22,6 +27,9 @@ class ArduinoController extends EventEmitter {
         // Version del firmware que declara la placa. null = todavia no se sabe,
         // o el firmware es tan viejo que no sabe decirla.
         this.firmwareVersion = null;
+        // Ultima lectura de SRAM libre que reporto la placa (RAM_LIBRE por
+        // ciclo). null mientras no haya corrido ninguna receta.
+        this.memoriaLibre = null;
         // Mientras se graba el firmware el puerto se cierra a proposito; sin
         // esto la reconexion automatica se lo arrebataria a avrdude a media
         // grabacion.
@@ -266,6 +274,23 @@ class ArduinoController extends EventEmitter {
         // La placa la anuncia sola al arrancar y tambien al preguntarle "FW?".
         if (data.startsWith('FIRMWARE:')) {
             this.firmwareVersion = data.slice('FIRMWARE:'.length).trim();
+        }
+
+        // La placa reporta su SRAM libre al cerrar cada ciclo. Va al log en
+        // nivel info -y no debug- a proposito: es una linea por ciclo, y es la
+        // unica forma de ver desde aqui si la memoria del Arduino se agota,
+        // que es lo que lo dejaba conectado pero sordo a los comandos.
+        if (data.startsWith('RAM_LIBRE:')) {
+            const bytes = Number.parseInt(data.slice('RAM_LIBRE:'.length), 10);
+            this.memoriaLibre = Number.isNaN(bytes) ? null : bytes;
+
+            if (this.memoriaLibre === null) {
+                logger.warn(`Lectura de memoria ilegible del Arduino: ${data}`);
+            } else if (this.memoriaLibre < MEMORIA_MINIMA_BYTES) {
+                logger.warn(`Arduino con poca memoria: ${this.memoriaLibre} bytes libres`);
+            } else {
+                logger.info(`Arduino: ${this.memoriaLibre} bytes de RAM libres`);
+            }
         }
 
         try {

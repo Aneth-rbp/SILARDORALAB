@@ -7,7 +7,7 @@
 // grabar la placa sola (ver src/firmware/). SUBIR ESTE NUMERO cada vez que se
 // cambie algo de este archivo que tenga que llegar a la maquina; si no se sube,
 // la placa se queda con el firmware viejo y nadie se entera.
-#define FIRMWARE_VERSION "3"
+#define FIRMWARE_VERSION "4"
 
 /*
  * Sistema de Control SILAR - Motores Stepper   
@@ -181,15 +181,15 @@ void guardarCalibracionZ() {
 
 // Formato fijo para que la app lo parsee sin ambigüedad.
 void enviarCalibracionZ() {
-  Serial.print("CAL_Z:ppm=");
+  Serial.print(F("CAL_Z:ppm="));
   Serial.print(PASOS_POR_MM_Z, 4);
-  Serial.print(",home=");
+  Serial.print(F(",home="));
   Serial.print(ALTURA_HOME_MM, 2);
-  Serial.print(",min=");
+  Serial.print(F(",min="));
   Serial.print(ALTURA_MINIMA_MM, 2);
-  Serial.print(",fondo=");
+  Serial.print(F(",fondo="));
   Serial.print(LIMITE_SOFTWARE_Z_ABAJO);
-  Serial.print(",z=");
+  Serial.print(F(",z="));
   Serial.println(posZ);
 }
 
@@ -221,7 +221,7 @@ void procesarCalibracionZ(String args) {
   if (isnan(minima)) minima = ALTURA_MINIMA_MM;
 
   if (!calibracionZValida(ppm, home, minima)) {
-    Serial.println("CAL_Z_ERROR: Valores fuera de rango");
+    Serial.println(F("CAL_Z_ERROR: Valores fuera de rango"));
     return;
   }
 
@@ -232,7 +232,7 @@ void procesarCalibracionZ(String args) {
 
   // La posición actual no se toca: posZ = 0 sigue siendo el home físico. Lo que
   // cambia es a cuántos mm sobre el suelo equivale, y eso se recalcula solo.
-  Serial.println("CAL_Z_APLICADA");
+  Serial.println(F("CAL_Z_APLICADA"));
   enviarCalibracionZ();
 }
 
@@ -243,23 +243,23 @@ void moverEjeZaAltura(float alturaMM) {
   long objetivo = alturaMMaPasosZ(alturaMM);
   long delta = objetivo - posZ;
 
-  Serial.print("GOTO_MM: ");
+  Serial.print(F("GOTO_MM: "));
   Serial.print(alturaMM, 1);
-  Serial.print(" mm -> Z=");
+  Serial.print(F(" mm -> Z="));
   Serial.print(objetivo);
-  Serial.print(" (delta ");
+  Serial.print(F(" (delta "));
   Serial.print(delta);
-  Serial.println(" pasos)");
+  Serial.println(F(" pasos)"));
 
   if (delta != 0) {
     moverEjeZ(delta);
   }
 
-  Serial.print("GOTO_MM_ALCANZADO: Z=");
+  Serial.print(F("GOTO_MM_ALCANZADO: Z="));
   Serial.print(posZ);
-  Serial.print(" -> ");
+  Serial.print(F(" -> "));
   Serial.print(pasosZaAlturaMM(posZ), 1);
-  Serial.println(" mm");
+  Serial.println(F(" mm"));
 }
 
 // Convierte una altura sobre el suelo (mm) a coordenada Z en pasos.
@@ -510,27 +510,27 @@ void guardarCalibracionY() {
 // que es justo el dato que hacía falta para saber por qué una receta a 39 mm/s
 // se recorta: ese tope depende de PASOS_POR_MM_Y.
 void enviarCalibracionY() {
-  Serial.print("CAL_Y:ppm=");
+  Serial.print(F("CAL_Y:ppm="));
   Serial.print(PASOS_POR_MM_Y, 4);
   for (int i = 0; i < 4; i++) {
-    Serial.print(",v");
+    Serial.print(F(",v"));
     Serial.print(i + 1);
-    Serial.print("=");
+    Serial.print(F("="));
     Serial.print(POS_VASO_MM[i], 2);
   }
-  Serial.print(",p1=");
+  Serial.print(F(",p1="));
   Serial.print(POS_Y1);
-  Serial.print(",p2=");
+  Serial.print(F(",p2="));
   Serial.print(POS_Y2);
-  Serial.print(",p3=");
+  Serial.print(F(",p3="));
   Serial.print(POS_Y3);
-  Serial.print(",p4=");
+  Serial.print(F(",p4="));
   Serial.print(POS_Y4);
-  Serial.print(",tope=");
+  Serial.print(F(",tope="));
   Serial.print(LIMITE_FISICO_Y_PASOS);
-  Serial.print(",vmax=");
+  Serial.print(F(",vmax="));
   Serial.print(MAX_SPEED_Y / PASOS_POR_MM_Y, 2);
-  Serial.print(",y=");
+  Serial.print(F(",y="));
   Serial.println(posY);
 }
 
@@ -544,7 +544,7 @@ void procesarCalibracionY(String args) {
   // Cambiar la geometría a mitad de receta dejaría los vasos repartidos entre
   // la disposición vieja y la nueva, así que se rechaza y no se toca nada.
   if (procesoActivo) {
-    Serial.println("CAL_Y_ERROR: No se puede cambiar la geometria con una receta en curso");
+    Serial.println(F("CAL_Y_ERROR: No se puede cambiar la geometria con una receta en curso"));
     return;
   }
 
@@ -559,7 +559,7 @@ void procesarCalibracionY(String args) {
   }
 
   if (!calibracionYValida(ppm, posiciones)) {
-    Serial.println("CAL_Y_ERROR: Valores fuera de rango o algun vaso no cabe en el eje");
+    Serial.println(F("CAL_Y_ERROR: Valores fuera de rango o algun vaso no cabe en el eje"));
     return;
   }
 
@@ -569,12 +569,30 @@ void procesarCalibracionY(String args) {
 
   // posY no se toca: el cero sigue siendo el home físico. Lo que cambia es
   // dónde quedan los cuatro vasos respecto a ese cero, y eso ya está aplicado.
-  Serial.println("CAL_Y_APLICADA");
+  Serial.println(F("CAL_Y_APLICADA"));
   enviarCalibracionY();
 }
 
+// Memoria SRAM libre entre la cima del heap y la pila. Es el dato que faltaba
+// para entender por que tras varias recetas la placa dejaba de obedecer: cuando
+// esto se agota, String no puede reservar, readStringUntil devuelve vacio y
+// todos los comandos se ignoran aunque el resto del sketch siga funcionando.
+//
+// No cuenta los huecos que deja la fragmentacion, asi que es una cota
+// optimista: si este numero ya baja receta tras receta, el problema es real.
+int memoriaLibre() {
+  extern int __heap_start, *__brkval;
+  int cima;
+  return (int) &cima - (__brkval == 0 ? (int) &__heap_start : (int) __brkval);
+}
+
+void enviarMemoriaLibre() {
+  Serial.print(F("RAM_LIBRE:"));
+  Serial.println(memoriaLibre());
+}
+
 void enviarVersionFirmware() {
-  Serial.print("FIRMWARE:");
+  Serial.print(F("FIRMWARE:"));
   Serial.println(FIRMWARE_VERSION);
 }
 
@@ -640,10 +658,10 @@ void setup() {
   limitMaxSwitchZ.setDebounceTime(50);
   emergencySwitch.setDebounceTime(50);
   
-  Serial.println("Sistema SILAR Iniciado");
+  Serial.println(F("Sistema SILAR Iniciado"));
   enviarVersionFirmware();
-  Serial.println("Hardware: Arduino Mega 2560 Rev3");
-  Serial.println("Documento: MOC-ELEC-001");
+  Serial.println(F("Hardware: Arduino Mega 2560 Rev3"));
+  Serial.println(F("Documento: MOC-ELEC-001"));
 
   // La aplicacion necesita las constantes de la maquina para mostrarlas
   enviarConfig();
@@ -676,7 +694,7 @@ void loop() {
       stepperZ.stop();
       digitalWrite(enablePinY, HIGH);  // HIGH = deshabilitado (detiene motores)
       digitalWrite(enablePinZ, HIGH);
-      Serial.println("PARO DE EMERGENCIA ACTIVADO");
+      Serial.println(F("PARO DE EMERGENCIA ACTIVADO"));
     }
     return;
   }
@@ -685,7 +703,7 @@ void loop() {
       emergencyStop = false;
       digitalWrite(enablePinY, LOW);   // LOW = habilitado (reactiva motores)
       digitalWrite(enablePinZ, LOW);
-      Serial.println("Paro de emergencia desactivado");
+      Serial.println(F("Paro de emergencia desactivado"));
   }
 
   stepperY.run();
@@ -705,11 +723,11 @@ void loop() {
       modo = 0;
       procesoActivo = false;
       procesoPausado = false;
-      Serial.println("Modo Manual");
+      Serial.println(F("Modo Manual"));
     }
     else if (comando == "2") {
       modo = 1;
-      Serial.println("Modo Automatico");
+      Serial.println(F("Modo Automatico"));
     }
     else if (comando == "3") {
       ejecutarHome();
@@ -736,13 +754,13 @@ void loop() {
     else if (comando == "RECIPE_BEGIN") {
       totalEtapas = 0;
       etapaActual = 0;
-      Serial.println("RECETA_ETAPAS_INICIO");
+      Serial.println(F("RECETA_ETAPAS_INICIO"));
     }
     else if (comando.startsWith("ADD_STAGE:")) {
       if (totalEtapas >= MAX_ETAPAS) {
-        Serial.print("ERROR: Maximo de etapas alcanzado (");
+        Serial.print(F("ERROR: Maximo de etapas alcanzado ("));
         Serial.print(MAX_ETAPAS);
-        Serial.println(")");
+        Serial.println(F(")"));
       } else {
         // Se parsea sobre recipeParams, que aqui hace de borrador, y de ahi se
         // copia a la etapa. Asi el parser y sus defaults son exactamente los
@@ -751,15 +769,15 @@ void loop() {
         parsearParametrosReceta(comando.substring(10));
         etapas[totalEtapas] = recipeParams;
         totalEtapas++;
-        Serial.print("ETAPA_AGREGADA: ");
+        Serial.print(F("ETAPA_AGREGADA: "));
         Serial.print(totalEtapas);
-        Serial.print("/");
+        Serial.print(F("/"));
         Serial.println(MAX_ETAPAS);
       }
     }
     else if (comando == "RECIPE_START") {
       if (totalEtapas == 0) {
-        Serial.println("ERROR: No hay etapas cargadas");
+        Serial.println(F("ERROR: No hay etapas cargadas"));
       } else {
         cargarEtapa(0);
         iniciarProcesoAutomatico();
@@ -768,13 +786,13 @@ void loop() {
     else if (comando == "PAUSE") {
       if (procesoActivo && !procesoPausado) {
         procesoPausado = true;
-        Serial.println("PROCESO_PAUSADO");
+        Serial.println(F("PROCESO_PAUSADO"));
       }
     }
     else if (comando == "RESUME") {
       if (procesoActivo && procesoPausado) {
         procesoPausado = false;
-        Serial.println("PROCESO_REANUDADO");
+        Serial.println(F("PROCESO_REANUDADO"));
       }
     }
     else if (comando == "STOP") {
@@ -785,23 +803,23 @@ void loop() {
       digitalWrite(lampPin, LOW);
       digitalWrite(fanPin, LOW);
       ventiladorActivo = false;
-      Serial.println("PROCESO_DETENIDO");
+      Serial.println(F("PROCESO_DETENIDO"));
     }
     else if (comando == "LAMP_ON") {
       digitalWrite(lampPin, HIGH);
-      Serial.println("LAMPARA_ACTIVADA");
+      Serial.println(F("LAMPARA_ACTIVADA"));
     }
     else if (comando == "LAMP_OFF") {
       digitalWrite(lampPin, LOW);
-      Serial.println("LAMPARA_DESACTIVADA");
+      Serial.println(F("LAMPARA_DESACTIVADA"));
     }
     else if (comando == "FAN_ON") {
       digitalWrite(fanPin, HIGH);
-      Serial.println("VENTILADOR_ACTIVADO");
+      Serial.println(F("VENTILADOR_ACTIVADO"));
     }
     else if (comando == "FAN_OFF") {
       digitalWrite(fanPin, LOW);
-      Serial.println("VENTILADOR_DESACTIVADO");
+      Serial.println(F("VENTILADOR_DESACTIVADO"));
     }
     else if (comando == "STATUS") {
       enviarStatus();
@@ -829,7 +847,7 @@ void loop() {
     }
     else if (comando == "CAL_Z_SAVE") {
       guardarCalibracionZ();
-      Serial.println("CAL_Z_GUARDADA");
+      Serial.println(F("CAL_Z_GUARDADA"));
       enviarCalibracionZ();
     }
     else if (comando == "CAL_Z_RESET") {
@@ -838,7 +856,7 @@ void loop() {
       ALTURA_MINIMA_MM = ALTURA_MINIMA_MM_FABRICA;
       recalcularLimitesZ();
       guardarCalibracionZ();
-      Serial.println("CAL_Z_RESTAURADA");
+      Serial.println(F("CAL_Z_RESTAURADA"));
       enviarCalibracionZ();
     }
     // --- Geometría del eje Y (separación entre vasos y escala) ---
@@ -851,7 +869,7 @@ void loop() {
     }
     else if (comando == "CAL_Y_SAVE") {
       guardarCalibracionY();
-      Serial.println("CAL_Y_GUARDADA");
+      Serial.println(F("CAL_Y_GUARDADA"));
       enviarCalibracionY();
     }
     else if (comando == "CAL_Y_RESET") {
@@ -859,7 +877,7 @@ void loop() {
       for (int i = 0; i < 4; i++) POS_VASO_MM[i] = POS_VASO_MM_FABRICA[i];
       recalcularPosicionesY();
       guardarCalibracionY();
-      Serial.println("CAL_Y_RESTAURADA");
+      Serial.println(F("CAL_Y_RESTAURADA"));
       enviarCalibracionY();
     }
     // Va a una altura absoluta sobre el suelo, en mm. Es el comando de
@@ -873,8 +891,13 @@ void loop() {
     else if (comando == "FW?") {
       enviarVersionFirmware();
     }
+    // Para vigilar la memoria desde la aplicacion sin tener que estar delante
+    // de la maquina.
+    else if (comando == "MEM?") {
+      enviarMemoriaLibre();
+    }
     else {
-      Serial.print("Error: Comando desconocido: ");
+      Serial.print(F("Error: Comando desconocido: "));
       Serial.println(comando);
     }
   }
@@ -1076,13 +1099,13 @@ void parsearParametrosReceta(String json) {
     // no toca. Se recorta aquí, con la receta a la vista, y se avisa una vez.
     float tope = LIMITE_FISICO_Y_PASOS / PASOS_POR_MM_Y;
     if (recipeParams.posVasoMM[i] > tope) {
-      Serial.print("ADVERTENCIA: Vaso ");
+      Serial.print(F("ADVERTENCIA: Vaso "));
       Serial.print(i + 1);
-      Serial.print(" recortado de ");
+      Serial.print(F(" recortado de "));
       Serial.print(recipeParams.posVasoMM[i], 1);
-      Serial.print(" a ");
+      Serial.print(F(" a "));
       Serial.print(tope, 1);
-      Serial.println(" mm (final de carrera)");
+      Serial.println(F(" mm (final de carrera)"));
       recipeParams.posVasoMM[i] = tope;
     }
   }
@@ -1090,54 +1113,54 @@ void parsearParametrosReceta(String json) {
   // Fan
   recipeParams.fan = json.indexOf("\"fan\":true") >= 0;
   
-  Serial.print("PARAMETROS_RECIBIDOS: Ciclos=");
+  Serial.print(F("PARAMETROS_RECIBIDOS: Ciclos="));
   Serial.print(recipeParams.cycles);
-  Serial.print(", Wait0=");
+  Serial.print(F(", Wait0="));
   Serial.print(recipeParams.dippingWait0);
-  Serial.print(", Wait1=");
+  Serial.print(F(", Wait1="));
   Serial.print(recipeParams.dippingWait1);
-  Serial.print(", Wait2=");
+  Serial.print(F(", Wait2="));
   Serial.print(recipeParams.dippingWait2);
-  Serial.print(", Wait3=");
+  Serial.print(F(", Wait3="));
   Serial.print(recipeParams.dippingWait3);
-  Serial.print(", PrevInmersion=");
+  Serial.print(F(", PrevInmersion="));
   Serial.print(recipeParams.transferWait);
-  Serial.print(", Transicion=");
+  Serial.print(F(", Transicion="));
   Serial.print(recipeParams.transitionWait);
-  Serial.print(", DipStart=");
+  Serial.print(F(", DipStart="));
   Serial.print(recipeParams.dipStartPosition, 1);
-  Serial.print("mm/");
+  Serial.print(F("mm/"));
   Serial.print(alturaMMaPasosZ(recipeParams.dipStartPosition));
-  Serial.print("pasos, DipLen=");
+  Serial.print(F("pasos, DipLen="));
   Serial.print(recipeParams.dippingLength, 1);
-  Serial.print("mm/");
+  Serial.print(F("mm/"));
   Serial.print(mmAPasosZ(recipeParams.dippingLength));
-  Serial.print("pasos, DipSpeed=");
+  Serial.print(F("pasos, DipSpeed="));
   Serial.print(recipeParams.dipSpeedMMs, 2);
-  Serial.print("mm/s (");
+  Serial.print(F("mm/s ("));
   Serial.print(velocidadMMsAMicros(recipeParams.dipSpeedMMs, PASOS_POR_MM_Z));
-  Serial.print("us), EmersionSpeed=");
+  Serial.print(F("us), EmersionSpeed="));
   Serial.print(velocidadEmersionMMs(), 2);
-  Serial.print("mm/s (");
+  Serial.print(F("mm/s ("));
   Serial.print(velocidadMMsAMicros(velocidadEmersionMMs(), PASOS_POR_MM_Z));
-  Serial.print("us), TransferSpeed=");
+  Serial.print(F("us), TransferSpeed="));
   Serial.print(recipeParams.transferSpeedMMs, 2);
-  Serial.print("mm/s (");
+  Serial.print(F("mm/s ("));
   Serial.print(velocidadMMsAMicros(recipeParams.transferSpeedMMs, PASOS_POR_MM_Y));
-  Serial.print("us), Vasos=");
+  Serial.print(F("us), Vasos="));
   // Se imprime la posición que se va a usar de verdad, no la que trajo el JSON:
   // así se ve de un vistazo cuáles vienen de la receta y cuáles de la máquina.
   for (int i = 0; i < 4; i++) {
-    if (i > 0) Serial.print("/");
+    if (i > 0) Serial.print(F("/"));
     Serial.print(posicionVasoPasos(i) / PASOS_POR_MM_Y, 1);
   }
-  Serial.println("mm");
+  Serial.println(F("mm"));
 }
 
 void pausarProcesoLimite() {
   if (procesoActivo && !procesoPausado) {
     procesoPausado = true;
-    Serial.println("PROCESO_PAUSADO");
+    Serial.println(F("PROCESO_PAUSADO"));
   }
 }
 
@@ -1161,9 +1184,9 @@ void aplicarPosicionInicialZ() {
   long objetivoZ = alturaMMaPasosZ(recipeParams.dipStartPosition);
   techoZReceta = objetivoZ;
 
-  Serial.print("POSICION_INICIAL: ");
+  Serial.print(F("POSICION_INICIAL: "));
   Serial.print(recipeParams.dipStartPosition, 1);
-  Serial.print(" mm sobre el suelo -> Z=");
+  Serial.print(F(" mm sobre el suelo -> Z="));
   Serial.println(objetivoZ);
 
   long delta = objetivoZ - posZ;
@@ -1171,7 +1194,7 @@ void aplicarPosicionInicialZ() {
     // A velocidad normal, no la de la receta: ver MICROS_POSICIONAMIENTO_Z.
     moverEjeZVelocidad(delta, MICROS_POSICIONAMIENTO_Z);
   }
-  Serial.print("POSICION_INICIAL_ALCANZADA: Z=");
+  Serial.print(F("POSICION_INICIAL_ALCANZADA: Z="));
   Serial.println(posZ);
 }
 
@@ -1185,20 +1208,20 @@ void cargarEtapa(int indice) {
 }
 
 void anunciarEtapa() {
-  Serial.print("ETAPA_INICIADA: ");
+  Serial.print(F("ETAPA_INICIADA: "));
   Serial.print(etapaActual + 1);
-  Serial.print("/");
+  Serial.print(F("/"));
   Serial.print(totalEtapas);
-  Serial.print(" Ciclos=");
+  Serial.print(F(" Ciclos="));
   Serial.println(ciclosTotales);
 }
 
 // Cierra la etapa en curso y arranca la siguiente sin home y sin pausa.
 // Devuelve false cuando ya no queda ninguna, es decir cuando la receta termino.
 bool avanzarEtapa() {
-  Serial.print("ETAPA_COMPLETADA: ");
+  Serial.print(F("ETAPA_COMPLETADA: "));
   Serial.print(etapaActual + 1);
-  Serial.print("/");
+  Serial.print(F("/"));
   Serial.println(totalEtapas);
 
   if (etapaActual + 1 >= totalEtapas) return false;
@@ -1212,10 +1235,10 @@ bool avanzarEtapa() {
 
 void finalizarProceso() {
   procesoActivo = false;
-  Serial.println("PROCESO_COMPLETADO");
+  Serial.println(F("PROCESO_COMPLETADO"));
 
   digitalWrite(lampPin, LOW);
-  Serial.println("LAMPARA_DESACTIVADA");
+  Serial.println(F("LAMPARA_DESACTIVADA"));
   aplicarVentilador(false);
 
   // Aquí ya no se hace home. Antes se ejecutaba siempre, y eso dejaba sin
@@ -1237,7 +1260,7 @@ void usarEtapaUnica() {
 
 void iniciarProcesoAutomatico() {
   if (modo != 1) {
-    Serial.println("ERROR: Debe estar en modo automatico");
+    Serial.println(F("ERROR: Debe estar en modo automatico"));
     return;
   }
   
@@ -1247,14 +1270,14 @@ void iniciarProcesoAutomatico() {
   cicloActual = 0;
   ciclosTotales = recipeParams.cycles;
   
-  Serial.print("PROCESO_INICIADO: Etapas=");
+  Serial.print(F("PROCESO_INICIADO: Etapas="));
   Serial.print(totalEtapas);
-  Serial.print(", Ciclos=");
+  Serial.print(F(", Ciclos="));
   Serial.println(ciclosTotales);
   
   // Activar lámpara interior al iniciar proceso
   digitalWrite(lampPin, HIGH);
-  Serial.println("LAMPARA_ACTIVADA");
+  Serial.println(F("LAMPARA_ACTIVADA"));
   
   // Activar ventilador si está configurado
   aplicarVentilador(recipeParams.fan);
@@ -1265,17 +1288,17 @@ void iniciarProcesoAutomatico() {
   // Diagnóstico: estas son EXACTAMENTE las cuatro condiciones que loop() evalúa
   // para llamar a ejecutarProcesoAutomatico(). Si el ciclo no arranca después
   // del posicionamiento, aquí se ve cuál de ellas quedó mal.
-  Serial.print("PROCESO_LISTO: activo=");
+  Serial.print(F("PROCESO_LISTO: activo="));
   Serial.print(procesoActivo);
-  Serial.print(" pausado=");
+  Serial.print(F(" pausado="));
   Serial.print(procesoPausado);
-  Serial.print(" emergencia=");
+  Serial.print(F(" emergencia="));
   Serial.print(emergencyStop);
-  Serial.print(" modo=");
+  Serial.print(F(" modo="));
   Serial.print(modo);
-  Serial.print(" ciclo=");
+  Serial.print(F(" ciclo="));
   Serial.print(cicloActual);
-  Serial.print("/");
+  Serial.print(F("/"));
   Serial.println(ciclosTotales);
 }
 
@@ -1287,9 +1310,9 @@ void ejecutarProcesoAutomatico() {
   }
   
   // Ejecutar el ciclo actual
-  Serial.print("CICLO_INICIADO: ");
+  Serial.print(F("CICLO_INICIADO: "));
   Serial.print(cicloActual + 1);
-  Serial.print("/");
+  Serial.print(F("/"));
   Serial.println(ciclosTotales);
   
   // Ejecutar inmersiones en cada posición Y
@@ -1321,10 +1344,14 @@ void ejecutarProcesoAutomatico() {
   // terminado, en vez de dejar el sustrato colgado sobre el ultimo.
   if (!regresarAlPrimerVasoDelCiclo()) return;
   
-  Serial.print("CICLO_COMPLETADO: ");
+  Serial.print(F("CICLO_COMPLETADO: "));
   Serial.print(cicloActual + 1);
-  Serial.print("/");
+  Serial.print(F("/"));
   Serial.println(ciclosTotales);
+
+  // Una lectura por ciclo deja la curva de memoria en el log sin que nadie
+  // tenga que preguntar: si baja, se ve venir antes de que la placa enmudezca.
+  enviarMemoriaLibre();
   
   // Incrementar ciclo actual
   cicloActual++;
@@ -1380,7 +1407,7 @@ bool regresarAlPrimerVasoDelCiclo() {
 
   if (!esperarSiPausado()) return false;
 
-  Serial.println("REGRESO_A_INICIO_CICLO");
+  Serial.println(F("REGRESO_A_INICIO_CICLO"));
   moverEjeYAbsoluto(objetivo);
 
   return esperarSiPausado();
@@ -1391,7 +1418,7 @@ void ejecutarInmersion(long posYTarget, int tiempoEspera, int numInmersion) {
     return;
   }
   
-  Serial.print("INMERSION_INICIADA: Y");
+  Serial.print(F("INMERSION_INICIADA: Y"));
   Serial.println(numInmersion);
   
   // Mover a posición Y
@@ -1413,11 +1440,11 @@ void ejecutarInmersion(long posYTarget, int tiempoEspera, int numInmersion) {
   if (margenDisponible < 0) margenDisponible = 0;
   if (bajadaReal > margenDisponible) {
     bajadaReal = margenDisponible;
-    Serial.print("ADVERTENCIA: Inmersion recortada a ");
+    Serial.print(F("ADVERTENCIA: Inmersion recortada a "));
     Serial.print(bajadaReal / PASOS_POR_MM_Z, 1);
-    Serial.print(" mm de los ");
+    Serial.print(F(" mm de los "));
     Serial.print(recipeParams.dippingLength, 1);
-    Serial.println(" mm pedidos (fondo del eje)");
+    Serial.println(F(" mm pedidos (fondo del eje)"));
   }
 
   // Bajar Z para inmersión (Z- baja físicamente con setPinsInverted)
@@ -1440,7 +1467,7 @@ void ejecutarInmersion(long posYTarget, int tiempoEspera, int numInmersion) {
   // siguiente para que tambien se respete tras la ultima inmersion del ciclo.
   if (!esperarConPausa(recipeParams.transitionWait)) return;
 
-  Serial.print("INMERSION_COMPLETADA: Y");
+  Serial.print(F("INMERSION_COMPLETADA: Y"));
   Serial.println(numInmersion);
 }
 
@@ -1459,18 +1486,18 @@ void verificarComandosDuranteMovimiento() {
       procesoPausado = false;
       digitalWrite(lampPin, LOW);
       digitalWrite(fanPin, LOW);
-      Serial.println("PROCESO_DETENIDO");
+      Serial.println(F("PROCESO_DETENIDO"));
     }
     else if (comando == "PAUSE") {
       if (procesoActivo && !procesoPausado) {
         procesoPausado = true;
-        Serial.println("PROCESO_PAUSADO");
+        Serial.println(F("PROCESO_PAUSADO"));
       }
     }
     else if (comando == "RESUME") {
       if (procesoActivo && procesoPausado) {
         procesoPausado = false;
-        Serial.println("PROCESO_REANUDADO");
+        Serial.println(F("PROCESO_REANUDADO"));
       }
     }
   }
@@ -1505,7 +1532,7 @@ bool esperarSiPausado() {
       stepperZ.stop();
       digitalWrite(enablePinY, HIGH);
       digitalWrite(enablePinZ, HIGH);
-      Serial.println("PARO DE EMERGENCIA ACTIVADO");
+      Serial.println(F("PARO DE EMERGENCIA ACTIVADO"));
       break;
     }
 
@@ -1516,7 +1543,7 @@ bool esperarSiPausado() {
 
     if (!avisado) {
       avisado = true;
-      Serial.println("Receta en pausa: el paso en curso queda congelado");
+      Serial.println(F("Receta en pausa: el paso en curso queda congelado"));
     }
 
     if (millis() - ultimoStatusMs >= STATUS_INTERVAL_MS) {
@@ -1532,7 +1559,7 @@ bool esperarSiPausado() {
 
 void moverEjeZVelocidad(long pasos, long velocidadMicrosegundos) {
   if (emergencyStop || (emergencySwitch.getState() == HIGH)) {
-    Serial.println("Error: Paro de emergencia activo");
+    Serial.println(F("Error: Paro de emergencia activo"));
     return;
   }
 
@@ -1547,12 +1574,12 @@ void moverEjeZVelocidad(long pasos, long velocidadMicrosegundos) {
   homeSwitchZ.loop();
   limitMaxSwitchZ.loop();
   if (direccionPositiva && homeSwitchZ.getState() == HIGH) {
-    Serial.println("ADVERTENCIA: Z ya esta en el switch de arriba, no se puede subir mas");
+    Serial.println(F("ADVERTENCIA: Z ya esta en el switch de arriba, no se puede subir mas"));
     pausarProcesoLimite();
     return;
   }
   if (!direccionPositiva && limitMaxSwitchZ.getState() == HIGH) {
-    Serial.println("ADVERTENCIA: Z ya esta en el switch de abajo, no se puede bajar mas");
+    Serial.println(F("ADVERTENCIA: Z ya esta en el switch de abajo, no se puede bajar mas"));
     pausarProcesoLimite();
     return;
   }
@@ -1562,7 +1589,7 @@ void moverEjeZVelocidad(long pasos, long velocidadMicrosegundos) {
   // declaradas junto a las constantes del eje Z al principio del sketch.
   if (!direccionPositiva && objetivo < LIMITE_SOFTWARE_Z_ABAJO) {
     objetivo = LIMITE_SOFTWARE_Z_ABAJO;
-    Serial.println("ADVERTENCIA: Limite virtual de Z alcanzado");
+    Serial.println(F("ADVERTENCIA: Limite virtual de Z alcanzado"));
   }
 
   // Techo de la receta: mientras el proceso automático corre, Z no puede subir
@@ -1570,7 +1597,7 @@ void moverEjeZVelocidad(long pasos, long velocidadMicrosegundos) {
   // No aplica al homing ni al modo manual, que dejan techoZReceta en 0.
   if (direccionPositiva && procesoActivo && techoZReceta != 0 && objetivo > techoZReceta) {
     objetivo = techoZReceta;
-    Serial.println("ADVERTENCIA: Techo de receta alcanzado en Z");
+    Serial.println(F("ADVERTENCIA: Techo de receta alcanzado en Z"));
   }
 
   // Convertir microsegundos entre flancos a pasos/segundo (aproximado)
@@ -1578,9 +1605,9 @@ void moverEjeZVelocidad(long pasos, long velocidadMicrosegundos) {
   float velocidadTarget = 1000000.0f / (2.0f * microsClamped); // dos flancos por ciclo
   if (velocidadTarget > MAX_SPEED_Z) {
     velocidadTarget = MAX_SPEED_Z;
-    Serial.print("ADVERTENCIA: Velocidad Z recortada a ");
+    Serial.print(F("ADVERTENCIA: Velocidad Z recortada a "));
     Serial.print(MAX_SPEED_Z / PASOS_POR_MM_Z, 1);
-    Serial.println(" mm/s (tope del eje)");
+    Serial.println(F(" mm/s (tope del eje)"));
   }
   if (velocidadTarget < 10.0f) velocidadTarget = 10.0f;
 
@@ -1615,7 +1642,7 @@ void moverEjeZVelocidad(long pasos, long velocidadMicrosegundos) {
       stepperZ.stop();
       digitalWrite(enablePinY, HIGH);  // Deshabilitar motores al instante
       digitalWrite(enablePinZ, HIGH);
-      Serial.println("PARO DE EMERGENCIA ACTIVADO");
+      Serial.println(F("PARO DE EMERGENCIA ACTIVADO"));
       break;
     }
 
@@ -1623,7 +1650,7 @@ void moverEjeZVelocidad(long pasos, long velocidadMicrosegundos) {
     verificarComandosDuranteMovimiento();
 
     if (emergencyStop) {
-      Serial.println("Movimiento Z interrumpido");
+      Serial.println(F("Movimiento Z interrumpido"));
       stepperZ.stop();
       posZ = stepperZ.currentPosition();
       stepperZ.setCurrentPosition(posZ);
@@ -1648,7 +1675,7 @@ void moverEjeZVelocidad(long pasos, long velocidadMicrosegundos) {
       if (!esperarSiPausado()) break;   // llego STOP o paro de emergencia
 
       if (ejeMovidoAManoEnPausa) {
-        Serial.println("AVISO: Z se movio a mano durante la pausa, el tramo pendiente se descarta");
+        Serial.println(F("AVISO: Z se movio a mano durante la pausa, el tramo pendiente se descarta"));
         break;
       }
 
@@ -1658,7 +1685,7 @@ void moverEjeZVelocidad(long pasos, long velocidadMicrosegundos) {
       continue;
     }
     if (procesoEnCurso && !procesoActivo) {
-      Serial.println("Movimiento Z cancelado");
+      Serial.println(F("Movimiento Z cancelado"));
       stepperZ.stop();
       posZ = stepperZ.currentPosition();
       stepperZ.setCurrentPosition(posZ);
@@ -1668,7 +1695,7 @@ void moverEjeZVelocidad(long pasos, long velocidadMicrosegundos) {
     // 3. Verificar límites físicos según dirección
     // Subir (Z+) → verificar homeSwitchZ (switch físico en pin 14)
     if (direccionPositiva && homeSwitchZ.getState() == HIGH) {
-      Serial.println("Limite Z Home alcanzado");
+      Serial.println(F("Limite Z Home alcanzado"));
       stepperZ.stop();
       posZ = stepperZ.currentPosition();
       stepperZ.setCurrentPosition(posZ);
@@ -1677,7 +1704,7 @@ void moverEjeZVelocidad(long pasos, long velocidadMicrosegundos) {
     }
     // Bajar (Z-) → verificar limitMaxSwitchZ (switch físico en pin 15)
     if (!direccionPositiva && limitMaxSwitchZ.getState() == HIGH) {
-      Serial.println("Limite Z Max alcanzado");
+      Serial.println(F("Limite Z Max alcanzado"));
       stepperZ.stop();
       posZ = stepperZ.currentPosition();
       stepperZ.setCurrentPosition(posZ);
@@ -1697,10 +1724,10 @@ void moverEjeZVelocidad(long pasos, long velocidadMicrosegundos) {
 }
 
 void ejecutarHome() {
-  Serial.println("Sending HOME");
+  Serial.println(F("Sending HOME"));
   
   if (emergencyStop) {
-    Serial.println("Error: Paro de emergencia activo");
+    Serial.println(F("Error: Paro de emergencia activo"));
     return;
   }
 
@@ -1736,7 +1763,7 @@ void ejecutarHome() {
   posZ = 0;
   stepperZ.setCurrentPosition(0);
   stepperZ.setMaxSpeed(MAX_SPEED_Z);
-  Serial.println("Home Z completado");
+  Serial.println(F("Home Z completado"));
 
   // --- Home Y ---
   // Mueve Y en la dirección del home (-) hasta que el switch se active
@@ -1763,19 +1790,19 @@ void ejecutarHome() {
   posY = 0;
   stepperY.setCurrentPosition(0);
   stepperY.setMaxSpeed(MAX_SPEED_Y);
-  Serial.println("Home Y completado");
+  Serial.println(F("Home Y completado"));
 
-  Serial.println("Secuencia HOME completada");
+  Serial.println(F("Secuencia HOME completada"));
 }
 
 void moverEjeY(long pasos) {
   if (emergencyStop || (emergencySwitch.getState() == HIGH)) {
-    Serial.println("Error: Paro de emergencia activo");
+    Serial.println(F("Error: Paro de emergencia activo"));
     return;
   }
   
   if (pasos == 0) {
-    Serial.print("Y: ");
+    Serial.print(F("Y: "));
     Serial.println(posY);
     return;
   }
@@ -1794,11 +1821,11 @@ void moverEjeY(long pasos) {
     velocidadY = recipeParams.transferSpeedMMs * PASOS_POR_MM_Y;
     if (velocidadY > MAX_SPEED_Y) {
       velocidadY = MAX_SPEED_Y;
-      Serial.print("ADVERTENCIA: Velocidad Y recortada a ");
+      Serial.print(F("ADVERTENCIA: Velocidad Y recortada a "));
       Serial.print(MAX_SPEED_Y / PASOS_POR_MM_Y, 1);
-      Serial.print(" mm/s de los ");
+      Serial.print(F(" mm/s de los "));
       Serial.print(recipeParams.transferSpeedMMs, 1);
-      Serial.println(" mm/s pedidos (tope del eje)");
+      Serial.println(F(" mm/s pedidos (tope del eje)"));
     }
     if (velocidadY < 10.0f) velocidadY = 10.0f;
   }
@@ -1806,7 +1833,7 @@ void moverEjeY(long pasos) {
   stepperY.setMaxSpeed(velocidadY);
   stepperY.setAcceleration(MAX_ACCEL_Y);
 
-  Serial.print("Moviendo Y: ");
+  Serial.print(F("Moviendo Y: "));
   Serial.print(direccionPositiva ? "+" : "-");
   Serial.println(labs(pasos));
 
@@ -1829,7 +1856,7 @@ void moverEjeY(long pasos) {
       stepperZ.stop();
       digitalWrite(enablePinY, HIGH);
       digitalWrite(enablePinZ, HIGH);
-      Serial.println("PARO DE EMERGENCIA ACTIVADO");
+      Serial.println(F("PARO DE EMERGENCIA ACTIVADO"));
       break;
     }
 
@@ -1837,7 +1864,7 @@ void moverEjeY(long pasos) {
     verificarComandosDuranteMovimiento();
 
     if (procesoEnCurso && !procesoActivo) {
-      Serial.println("Movimiento Y cancelado");
+      Serial.println(F("Movimiento Y cancelado"));
       stepperY.stop();
       break;
     }
@@ -1862,13 +1889,13 @@ void moverEjeY(long pasos) {
 
     // 3. Verificar límites físicos según dirección
     if (direccionPositiva && limitMaxSwitchY.getState() == HIGH) {
-      Serial.println("Limite Y Max alcanzado");
+      Serial.println(F("Limite Y Max alcanzado"));
       stepperY.stop();
       pausarProcesoLimite();
       break;
     }
     if (!direccionPositiva && homeSwitchY.getState() == HIGH) {
-      Serial.println("Limite Y Min alcanzado");
+      Serial.println(F("Limite Y Min alcanzado"));
       stepperY.stop();
       pausarProcesoLimite();
       break;
@@ -1880,18 +1907,18 @@ void moverEjeY(long pasos) {
   posY = stepperY.currentPosition();
   stepperY.setCurrentPosition(posY);
 
-  Serial.print("Y: ");
+  Serial.print(F("Y: "));
   Serial.println(posY);
 }
 
 void moverEjeZ(long pasos) {
   if (emergencyStop || (emergencySwitch.getState() == HIGH)) {
-    Serial.println("Error: Paro de emergencia activo");
+    Serial.println(F("Error: Paro de emergencia activo"));
     return;
   }
   
   if (pasos == 0) {
-    Serial.print("Z: ");
+    Serial.print(F("Z: "));
     Serial.println(posZ);
     return;
   }
@@ -1903,9 +1930,9 @@ void moverEjeZ(long pasos) {
   // Sin esto, un Z-9999 desde el monitor serial se lleva el sustrato al suelo.
   if (!direccionPositiva && objetivo < LIMITE_SOFTWARE_Z_ABAJO) {
     objetivo = LIMITE_SOFTWARE_Z_ABAJO;
-    Serial.print("ADVERTENCIA: Limite virtual de Z alcanzado (");
+    Serial.print(F("ADVERTENCIA: Limite virtual de Z alcanzado ("));
     Serial.print(ALTURA_MINIMA_MM, 1);
-    Serial.println(" mm sobre el suelo)");
+    Serial.println(F(" mm sobre el suelo)"));
   }
 
   stepperZ.setMaxSpeed(MAX_SPEED_Z);
@@ -1918,10 +1945,10 @@ void moverEjeZ(long pasos) {
   // muerta sin más salida que STOP.
   if (procesoActivo && procesoPausado) {
     ejeMovidoAManoEnPausa = true;
-    Serial.println("AVISO: Receta pausada. El jog manual la descuadrara si luego se reanuda con RESUME.");
+    Serial.println(F("AVISO: Receta pausada. El jog manual la descuadrara si luego se reanuda con RESUME."));
   }
 
-  Serial.print("Moviendo Z: ");
+  Serial.print(F("Moviendo Z: "));
   Serial.print(direccionPositiva ? "+" : "-");
   Serial.println(labs(pasos));
 
@@ -1944,7 +1971,7 @@ void moverEjeZ(long pasos) {
       stepperZ.stop();
       digitalWrite(enablePinY, HIGH);
       digitalWrite(enablePinZ, HIGH);
-      Serial.println("PARO DE EMERGENCIA ACTIVADO");
+      Serial.println(F("PARO DE EMERGENCIA ACTIVADO"));
       break;
     }
 
@@ -1952,7 +1979,7 @@ void moverEjeZ(long pasos) {
     verificarComandosDuranteMovimiento();
 
     if (procesoEnCurso && !procesoActivo) {
-      Serial.println("Movimiento Z cancelado");
+      Serial.println(F("Movimiento Z cancelado"));
       stepperZ.stop();
       break;
     }
@@ -1961,14 +1988,14 @@ void moverEjeZ(long pasos) {
     // 3. Verificar límites físicos
     // Subir (Z+) → verificar homeSwitchZ (switch físico en pin 14)
     if (direccionPositiva && homeSwitchZ.getState() == HIGH) {
-      Serial.println("Limite Z Home alcanzado");
+      Serial.println(F("Limite Z Home alcanzado"));
       stepperZ.stop();
       pausarProcesoLimite();
       break;
     }
     // Bajar (Z-) → verificar limitMaxSwitchZ (switch físico en pin 15)
     if (!direccionPositiva && limitMaxSwitchZ.getState() == HIGH) {
-      Serial.println("Limite Z Max alcanzado");
+      Serial.println(F("Limite Z Max alcanzado"));
       stepperZ.stop();
       pausarProcesoLimite();
       break;
@@ -1980,45 +2007,45 @@ void moverEjeZ(long pasos) {
   posZ = stepperZ.currentPosition();
   stepperZ.setCurrentPosition(posZ);
 
-  Serial.print("Z: ");
+  Serial.print(F("Z: "));
   Serial.println(posZ);
 }
 
 void enviarStatus() {
-  Serial.print("STATUS:");
-  Serial.print("Mode=");
+  Serial.print(F("STATUS:"));
+  Serial.print(F("Mode="));
   Serial.print(modo == 0 ? "MANUAL" : "AUTOMATIC");
-  Serial.print(",Emergency=");
+  Serial.print(F(",Emergency="));
   Serial.print(emergencyStop ? "1" : "0");
-  Serial.print(",ProcessActive=");
+  Serial.print(F(",ProcessActive="));
   Serial.print(procesoActivo ? "1" : "0");
-  Serial.print(",ProcessPaused=");
+  Serial.print(F(",ProcessPaused="));
   Serial.print(procesoPausado ? "1" : "0");
-  Serial.print(",Cycle=");
+  Serial.print(F(",Cycle="));
   Serial.print(cicloActual);
-  Serial.print("/");
+  Serial.print(F("/"));
   Serial.print(ciclosTotales);
-  Serial.print(",Y=");
+  Serial.print(F(",Y="));
   Serial.print(posY);
-  Serial.print(",Z=");
+  Serial.print(F(",Z="));
   Serial.print(posZ);
-  Serial.print(",Zmm=");
+  Serial.print(F(",Zmm="));
   Serial.print(pasosZaAlturaMM(posZ), 1);
-  Serial.print(",HomeY=");
+  Serial.print(F(",HomeY="));
   Serial.print(digitalRead(homePinY) == HIGH ? "1" : "0");
-  Serial.print(",HomeZ=");
+  Serial.print(F(",HomeZ="));
   Serial.print(digitalRead(homePinZ) == HIGH ? "1" : "0");
-  Serial.print(",LimitMinY=");
+  Serial.print(F(",LimitMinY="));
   Serial.print(digitalRead(limitMinY) == HIGH ? "1" : "0");
-  Serial.print(",LimitMaxY=");
+  Serial.print(F(",LimitMaxY="));
   Serial.print(digitalRead(limitMaxY) == HIGH ? "1" : "0");
-  Serial.print(",LimitMinZ=");
+  Serial.print(F(",LimitMinZ="));
   Serial.print(digitalRead(limitMinZ) == HIGH ? "1" : "0");
-  Serial.print(",LimitMaxZ=");
+  Serial.print(F(",LimitMaxZ="));
   Serial.print(digitalRead(limitMaxZ) == HIGH ? "1" : "0");
-  Serial.print(",Lamp=");
+  Serial.print(F(",Lamp="));
   Serial.print(digitalRead(lampPin) == HIGH ? "1" : "0");
-  Serial.print(",Fan=");
+  Serial.print(F(",Fan="));
   Serial.println(digitalRead(fanPin) == HIGH ? "1" : "0");
 }
 
@@ -2027,28 +2054,28 @@ void enviarStatus() {
 // cuando el PC la pide con "CONFIG", en lugar de repetirla en cada STATUS.
 // Ojo: quien recalibre Y por CAL_Y_* debe releer esto, porque Y1..Y4 se mueven.
 void enviarConfig() {
-  Serial.print("CONFIG:");
-  Serial.print("Y1=");
+  Serial.print(F("CONFIG:"));
+  Serial.print(F("Y1="));
   Serial.print(POS_Y1);
-  Serial.print(",Y2=");
+  Serial.print(F(",Y2="));
   Serial.print(POS_Y2);
-  Serial.print(",Y3=");
+  Serial.print(F(",Y3="));
   Serial.print(POS_Y3);
-  Serial.print(",Y4=");
+  Serial.print(F(",Y4="));
   Serial.print(POS_Y4);
-  Serial.print(",HomeY=0");
-  Serial.print(",AlturaHomeMM=");
+  Serial.print(F(",HomeY=0"));
+  Serial.print(F(",AlturaHomeMM="));
   Serial.print(ALTURA_HOME_MM, 1);
-  Serial.print(",AlturaMinimaMM=");
+  Serial.print(F(",AlturaMinimaMM="));
   Serial.print(ALTURA_MINIMA_MM, 1);
-  Serial.print(",PasosPorMMZ=");
+  Serial.print(F(",PasosPorMMZ="));
   Serial.print(PASOS_POR_MM_Z, 3);
-  Serial.print(",PasosPorMMY=");
+  Serial.print(F(",PasosPorMMY="));
   Serial.println(PASOS_POR_MM_Y, 3);
 }
 
 void pruebaStepManual(int pinStep, int pinDir) {
-  Serial.println("STEP_TEST: Iniciando");
+  Serial.println(F("STEP_TEST: Iniciando"));
   digitalWrite(pinDir, HIGH);
   for (int i = 0; i < 10; i++) {
     digitalWrite(pinStep, HIGH);
@@ -2063,24 +2090,24 @@ void pruebaStepManual(int pinStep, int pinDir) {
     digitalWrite(pinStep, LOW);
     delay(200);
   }
-  Serial.println("STEP_TEST: Finalizado");
+  Serial.println(F("STEP_TEST: Finalizado"));
 }
 void enviarStatusHardware() {
-  Serial.print("HW_STATUS:");
-  Serial.print("EnableY=");
+  Serial.print(F("HW_STATUS:"));
+  Serial.print(F("EnableY="));
   Serial.print(digitalRead(enablePinY) == HIGH ? "HIGH" : "LOW");
-  Serial.print(",EnableZ=");
+  Serial.print(F(",EnableZ="));
   Serial.print(digitalRead(enablePinZ) == HIGH ? "HIGH" : "LOW");
-  Serial.print(",DirY=");
+  Serial.print(F(",DirY="));
   Serial.print(digitalRead(dirPinY) == HIGH ? "HIGH" : "LOW");
-  Serial.print(",DirZ=");
+  Serial.print(F(",DirZ="));
   Serial.print(digitalRead(dirPinZ) == HIGH ? "HIGH" : "LOW");
-  Serial.print(",StepY=");
+  Serial.print(F(",StepY="));
   Serial.print(digitalRead(stepPinY) == HIGH ? "HIGH" : "LOW");
-  Serial.print(",StepZ=");
+  Serial.print(F(",StepZ="));
   Serial.print(digitalRead(stepPinZ) == HIGH ? "HIGH" : "LOW");
-  Serial.print(",LampPin=");
+  Serial.print(F(",LampPin="));
   Serial.print(digitalRead(lampPin) == HIGH ? "HIGH" : "LOW");
-  Serial.print(",FanPin=");
+  Serial.print(F(",FanPin="));
   Serial.println(digitalRead(fanPin) == HIGH ? "HIGH" : "LOW");
 }
