@@ -56,7 +56,6 @@
     ],
     "extraResources": [
       {
-        "//": "Lo que deja scripts/compilar-firmware.js. Solo estos tres: el resto de firmware-build son las herramientas de compilacion, cientos de MB.",
         "from": "firmware-build",
         "to": "firmware",
         "filter": [
