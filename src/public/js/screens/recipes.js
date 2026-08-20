@@ -4,19 +4,29 @@
  */
 
 class RecipesScreen {
-    // Topes físicos de los ejes, en mm/s. No son configurables desde la base:
-    // salen de las constantes de SILAR_Control.ino, donde MAX_SPEED_Y y
-    // MAX_SPEED_Z valen 2000 pasos/s. Con PASOS_POR_MM_Y = 4200 pasos / 55 mm
-    // entre vasos quedan ~26 mm/s en Y, y con los 20 pasos/mm de fábrica de Z
-    // quedan 100 mm/s. El firmware recorta solo y avisa por serial si se pasan,
-    // pero conviene que el operador se entere antes de guardar la receta.
+    // Lo que cada eje da de verdad, en mm/s. Salen de las constantes de
+    // SILAR_Control.ino, donde MAX_SPEED_Y y MAX_SPEED_Z valen 2000 pasos/s: con
+    // PASOS_POR_MM_Y = 4200 pasos / 55 mm entre vasos quedan ~26 mm/s en Y, y
+    // con los 20 pasos/mm de fábrica de Z quedan 100 mm/s.
+    //
+    // No son el tope que se valida al guardar —ese lo pone el administrador en
+    // Configuración y lo lee limitesVelocidad()—, sino lo que se le dice al
+    // operador en el campo: por encima de estos números el firmware recorta solo
+    // y avisa por serial, así que la receta correría más lenta de lo escrito y la
+    // duración estimada se quedaría corta.
+    //
     // Las escalas de los DOS ejes son recalibrables desde Configuración, así que
-    // los topes reales pueden moverse; estos valores son los de fábrica. El tope
-    // vigente de Y lo publica el firmware en CAL_Y (campo vmax) y se ve en el
-    // panel de geometría; pasarse de aquí no rompe nada, solo hace que el
-    // firmware recorte y avise.
+    // los valores reales pueden moverse; estos son los de fábrica. El vigente de
+    // Y lo publica el firmware en CAL_Y (campo vmax) y se ve en el panel de
+    // geometría.
     static MAX_TRANSFER_SPEED_MMS = 26;
     static MAX_Z_SPEED_MMS = 100;
+
+    // Límite de velocidad de una receta cuando la configuración no se puede
+    // leer. Es el mismo valor que siembra la migración 008 en max_transfer_speed
+    // y max_dip_speed, para que una base a medio migrar se comporte igual que
+    // una al día.
+    static LIMITE_VELOCIDAD_POR_DEFECTO_MMS = 50;
 
     // Recorrido útil del eje Y en mm: el final de carrera está en 14027 pasos y
     // con los 76.36 pasos/mm de fábrica salen 183.7 mm. Es el tope para las
@@ -136,10 +146,8 @@ class RecipesScreen {
             // Si no se puede cargar, usar valores por defecto
             console.warn('No se pudieron cargar las configuraciones del sistema, usando valores por defecto');
             this.systemConfig = {
-                max_velocity_y: 1000,
-                max_velocity_z: 1000,
-                max_accel_y: 100,
-                max_accel_z: 100,
+                max_transfer_speed: RecipesScreen.LIMITE_VELOCIDAD_POR_DEFECTO_MMS,
+                max_dip_speed: RecipesScreen.LIMITE_VELOCIDAD_POR_DEFECTO_MMS,
                 humidity_offset: 0,
                 temperature_offset: 0
             };
@@ -615,6 +623,36 @@ class RecipesScreen {
         this.app.limpiarModalesHuerfanos();
     }
 
+    /**
+     * Los límites de arranque, para cuando no hay configuración que aplicar.
+     */
+    static limitesPorDefecto() {
+        return {
+            transferSpeed: RecipesScreen.LIMITE_VELOCIDAD_POR_DEFECTO_MMS,
+            dipSpeed: RecipesScreen.LIMITE_VELOCIDAD_POR_DEFECTO_MMS
+        };
+    }
+
+    /**
+     * Topes de velocidad vigentes, en mm/s: el límite que el administrador dejó
+     * en Configuración. Si no se pudo leer o trae basura, manda el valor por
+     * defecto, el mismo que siembra la migración. La emersión comparte límite
+     * con la inmersión: es el mismo eje.
+     *
+     * Que un valor quepa aquí no quiere decir que el eje lo dé: por encima de
+     * MAX_TRANSFER_SPEED_MMS / MAX_Z_SPEED_MMS el firmware recorta solo y lo
+     * avisa por el puerto serie.
+     */
+    limitesVelocidad() {
+        const config = this.systemConfig || {};
+        const valido = (valor) => (valor > 0 ? valor : RecipesScreen.LIMITE_VELOCIDAD_POR_DEFECTO_MMS);
+
+        return {
+            transferSpeed: valido(parseFloat(config.max_transfer_speed)),
+            dipSpeed: valido(parseFloat(config.max_dip_speed))
+        };
+    }
+
     initRecipeForm(recipe) {
         const form = document.getElementById('recipe-form');
         if (!form) return;
@@ -685,24 +723,35 @@ class RecipesScreen {
         }
 
         // Aplicar límites máximos a los campos. Los tres llegan al firmware y van
-        // en mm/s, con el tope físico del eje: no se leen de la configuración
-        // porque no son ajustables, los fija la mecánica (ver
-        // MAX_TRANSFER_SPEED_MMS / MAX_Z_SPEED_MMS).
+        // en mm/s, con el tope vigente del eje: el límite de seguridad que dejó
+        // el administrador en Configuración o el tope físico de la mecánica, el
+        // que sea menor (ver limitesVelocidad).
+        const limites = this.limitesVelocidad();
         const transferSpeedInput = form.querySelector('#recipe-transfer-speed');   // Velocidad de transferencia Y
         const dipSpeedInput = form.querySelector('#recipe-dip-speed');             // Bajada del eje Z
         const emersionSpeedInput = form.querySelector('#recipe-emersion-speed');   // Subida del eje Z
 
+        // El aviso de la mecánica va en el título junto al máximo: el límite
+        // configurado puede quedar por encima de lo que el eje da, y ahí el
+        // firmware recorta sin que la receta se entere.
+        const avisoY = limites.transferSpeed > RecipesScreen.MAX_TRANSFER_SPEED_MMS
+            ? ` El eje Y no pasa de ${RecipesScreen.MAX_TRANSFER_SPEED_MMS} mm/s: por encima de ahí el firmware recorta.`
+            : '';
+        const avisoZ = limites.dipSpeed > RecipesScreen.MAX_Z_SPEED_MMS
+            ? ` El eje Z no pasa de ${RecipesScreen.MAX_Z_SPEED_MMS} mm/s: por encima de ahí el firmware recorta.`
+            : '';
+
         if (transferSpeedInput) {
-            transferSpeedInput.setAttribute('max', RecipesScreen.MAX_TRANSFER_SPEED_MMS);
-            transferSpeedInput.setAttribute('title', `Máximo: ${RecipesScreen.MAX_TRANSFER_SPEED_MMS} mm/s`);
+            transferSpeedInput.setAttribute('max', limites.transferSpeed);
+            transferSpeedInput.setAttribute('title', `Máximo: ${limites.transferSpeed} mm/s.${avisoY}`);
         }
         if (dipSpeedInput) {
-            dipSpeedInput.setAttribute('max', RecipesScreen.MAX_Z_SPEED_MMS);
-            dipSpeedInput.setAttribute('title', `Máximo: ${RecipesScreen.MAX_Z_SPEED_MMS} mm/s. Solo la bajada a la solución.`);
+            dipSpeedInput.setAttribute('max', limites.dipSpeed);
+            dipSpeedInput.setAttribute('title', `Máximo: ${limites.dipSpeed} mm/s. Solo la bajada a la solución.${avisoZ}`);
         }
         if (emersionSpeedInput) {
-            emersionSpeedInput.setAttribute('max', RecipesScreen.MAX_Z_SPEED_MMS);
-            emersionSpeedInput.setAttribute('title', `Máximo: ${RecipesScreen.MAX_Z_SPEED_MMS} mm/s. Vacío = subir a la misma velocidad de la inmersión.`);
+            emersionSpeedInput.setAttribute('max', limites.dipSpeed);
+            emersionSpeedInput.setAttribute('title', `Máximo: ${limites.dipSpeed} mm/s. Vacío = subir a la misma velocidad de la inmersión.${avisoZ}`);
         }
 
         for (let i = 1; i <= 4; i++) {
@@ -840,26 +889,28 @@ class RecipesScreen {
         // Los tres campos se validaban con bloques calcados que solo diferían en
         // el máximo y la unidad, y fue justo ahí donde las unidades se desviaron:
         // los de mm/s se comparaban contra topes en rpm. Con la tabla quedan a la
-        // vista de un vistazo. Las tres velocidades llegan al firmware en mm/s y
-        // su tope lo fija la mecánica del eje, no la configuración.
-        const limites = [
-            ['#recipe-transfer-speed', RecipesScreen.MAX_TRANSFER_SPEED_MMS, 'mm/s'],
-            ['#recipe-dip-speed', RecipesScreen.MAX_Z_SPEED_MMS, 'mm/s'],
-            ['#recipe-emersion-speed', RecipesScreen.MAX_Z_SPEED_MMS, 'mm/s']
+        // vista de un vistazo. Las tres velocidades llegan al firmware en mm/s.
+        const campos = [
+            ['#recipe-transfer-speed', 'transferSpeed'],
+            ['#recipe-dip-speed', 'dipSpeed'],
+            ['#recipe-emersion-speed', 'dipSpeed']
         ];
 
         // Igual que en el autocalculo de duracion: un listener por campo y no
-        // uno por apertura del formulario.
-        limites.forEach(([selector, maximo, unidad]) => {
+        // uno por apertura del formulario. El tope se lee dentro del listener y
+        // no al engancharlo, porque el listener sobrevive a que el administrador
+        // cambie el límite de seguridad sin cerrar la aplicación.
+        campos.forEach(([selector, eje]) => {
             const input = form.querySelector(selector);
             if (!input || input.dataset.limiteBinded) return;
             input.dataset.limiteBinded = '1';
 
             input.addEventListener('input', (e) => {
+                const maximo = this.limitesVelocidad()[eje];
                 const value = parseFloat(e.target.value) || 0;
                 if (value > maximo) {
                     e.target.classList.add('is-invalid');
-                    e.target.setCustomValidity(`El valor máximo permitido es ${maximo} ${unidad}`);
+                    e.target.setCustomValidity(`El valor máximo permitido es ${maximo} mm/s`);
                 } else {
                     e.target.classList.remove('is-invalid');
                     e.target.setCustomValidity('');
@@ -875,7 +926,7 @@ class RecipesScreen {
      * y de esta tabla salen tanto el formulario como la lectura de vuelta en
      * saveRecipe. Agregar un parámetro a la receta es agregar una fila.
      */
-    static stageFieldGroups() {
+    static stageFieldGroups(limites = RecipesScreen.limitesPorDefecto()) {
         return [
             {
                 title: 'Tiempos del Ciclo (ms)',
@@ -918,11 +969,11 @@ class RecipesScreen {
                     { key: 'dipStartPosition', label: 'Posición Inicial Z (mm)', step: 0.1 },
                     { key: 'dippingLength', label: 'Longitud de Inmersión (mm)', step: 0.1 },
                     { key: 'transferSpeed', label: 'Velocidad Transferencia Y (mm/s)', step: 0.1,
-                      max: RecipesScreen.MAX_TRANSFER_SPEED_MMS, unidad: 'mm/s' },
+                      max: limites.transferSpeed, unidad: 'mm/s' },
                     { key: 'dipSpeed', label: 'Velocidad Inmersión Z (mm/s)', step: 0.1,
-                      max: RecipesScreen.MAX_Z_SPEED_MMS, unidad: 'mm/s' },
+                      max: limites.dipSpeed, unidad: 'mm/s' },
                     { key: 'emersionSpeed', label: 'Velocidad Emersión Z (mm/s)', step: 0.1,
-                      max: RecipesScreen.MAX_Z_SPEED_MMS, unidad: 'mm/s',
+                      max: limites.dipSpeed, unidad: 'mm/s',
                       placeholder: 'Igual que inmersión' },
                     { key: 'posY1', label: 'Vaso 1 (mm)', step: 0.1, min: 0,
                       max: RecipesScreen.MAX_VESSEL_POSITION_MM, unidad: 'mm', placeholder: 'Calibrada' },
@@ -1133,7 +1184,7 @@ class RecipesScreen {
     }
 
     stageCardHtml(indice, etapa, total) {
-        const grupos = RecipesScreen.stageFieldGroups();
+        const grupos = RecipesScreen.stageFieldGroups(this.limitesVelocidad());
         const cuerpoId = `stage-body-${indice}`;
         const abierto = total === 1 || indice === this.stageAbierta;
 
@@ -1320,17 +1371,19 @@ class RecipesScreen {
      * Devuelve el motivo del rechazo o null si la etapa es válida.
      */
     validateStageLimits(etapa) {
+        const limites = this.limitesVelocidad();
+
         if ((etapa.cycles || 0) < 1) {
             return 'la cantidad de ciclos debe ser al menos 1';
         }
-        if ((etapa.transferSpeed || 0) > RecipesScreen.MAX_TRANSFER_SPEED_MMS) {
-            return `la velocidad de transferencia Y no puede exceder ${RecipesScreen.MAX_TRANSFER_SPEED_MMS} mm/s`;
+        if ((etapa.transferSpeed || 0) > limites.transferSpeed) {
+            return `la velocidad de transferencia Y no puede exceder ${limites.transferSpeed} mm/s`;
         }
-        if ((etapa.dipSpeed || 0) > RecipesScreen.MAX_Z_SPEED_MMS) {
-            return `la velocidad de inmersión Z no puede exceder ${RecipesScreen.MAX_Z_SPEED_MMS} mm/s`;
+        if ((etapa.dipSpeed || 0) > limites.dipSpeed) {
+            return `la velocidad de inmersión Z no puede exceder ${limites.dipSpeed} mm/s`;
         }
-        if ((etapa.emersionSpeed || 0) > RecipesScreen.MAX_Z_SPEED_MMS) {
-            return `la velocidad de emersión Z no puede exceder ${RecipesScreen.MAX_Z_SPEED_MMS} mm/s`;
+        if ((etapa.emersionSpeed || 0) > limites.dipSpeed) {
+            return `la velocidad de emersión Z no puede exceder ${limites.dipSpeed} mm/s`;
         }
         for (let i = 1; i <= 4; i++) {
             const mm = etapa[`posY${i}`] || 0;
@@ -1395,26 +1448,27 @@ class RecipesScreen {
         // firmware y van en mm/s. Antes se validaban como si fueran la velocidad y
         // la aceleración del eje Z en rpm, contra un tope de 100: eso rechazaba
         // valores perfectamente válidos y dejaba pasar otros que el eje no puede dar.
+        const limitesVelocidad = this.limitesVelocidad();
         const transferSpeed = parseFloat(formData.get('transferSpeed')) || 0;
         const dipSpeed = parseFloat(formData.get('dipSpeed')) || 0;
         // Vacío = 0 = subir a la misma velocidad de la inmersión, que es como se
         // comportaba el sistema antes de que este campo existiera.
         const emersionSpeed = parseFloat(formData.get('emersionSpeed')) || 0;
 
-        if (transferSpeed > RecipesScreen.MAX_TRANSFER_SPEED_MMS) {
-            this.app.showError(`La velocidad de transferencia Y no puede exceder ${RecipesScreen.MAX_TRANSFER_SPEED_MMS} mm/s`);
+        if (transferSpeed > limitesVelocidad.transferSpeed) {
+            this.app.showError(`La velocidad de transferencia Y no puede exceder ${limitesVelocidad.transferSpeed} mm/s`);
             form.querySelector('#recipe-transfer-speed').focus();
             return;
         }
 
-        if (dipSpeed > RecipesScreen.MAX_Z_SPEED_MMS) {
-            this.app.showError(`La velocidad de inmersión Z no puede exceder ${RecipesScreen.MAX_Z_SPEED_MMS} mm/s`);
+        if (dipSpeed > limitesVelocidad.dipSpeed) {
+            this.app.showError(`La velocidad de inmersión Z no puede exceder ${limitesVelocidad.dipSpeed} mm/s`);
             form.querySelector('#recipe-dip-speed').focus();
             return;
         }
 
-        if (emersionSpeed > RecipesScreen.MAX_Z_SPEED_MMS) {
-            this.app.showError(`La velocidad de emersión Z no puede exceder ${RecipesScreen.MAX_Z_SPEED_MMS} mm/s`);
+        if (emersionSpeed > limitesVelocidad.dipSpeed) {
+            this.app.showError(`La velocidad de emersión Z no puede exceder ${limitesVelocidad.dipSpeed} mm/s`);
             form.querySelector('#recipe-emersion-speed').focus();
             return;
         }

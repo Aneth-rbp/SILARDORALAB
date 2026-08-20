@@ -323,10 +323,12 @@ INSERT INTO system_config (config_key, config_value, config_type, description, c
 
 -- Configuración de Parámetros del Sistema (Panel de Administración)
 ('report_path', 'C:\\SILAR\\Reportes', 'string', 'Dirección para guardar reportes', 'system'),
-('max_velocity_y', '1000', 'number', 'Velocidad máxima del eje Y en rpm', 'motion'),
-('max_velocity_z', '1000', 'number', 'Velocidad máxima del eje Z en rpm', 'motion'),
-('max_accel_y', '100', 'number', 'Aceleración máxima del eje Y en rpm/s', 'motion'),
-('max_accel_z', '100', 'number', 'Aceleración máxima del eje Z en rpm/s', 'motion'),
+-- Topes de velocidad de los ejes, en mm/s: es el máximo que el administrador
+-- deja pedir en una receta, sobre los mismos campos que van al firmware. La
+-- aceleración no se configura aquí: la fija el firmware según lo que aguanta la
+-- mecánica (MAX_ACCEL_Y / MAX_ACCEL_Z en SILAR_Control.ino).
+('max_transfer_speed', '50', 'number', 'Velocidad máxima de transferencia del eje Y en mm/s', 'motion'),
+('max_dip_speed', '50', 'number', 'Velocidad máxima del eje Z (inmersión y emersión) en mm/s', 'motion'),
 ('humidity_offset', '0', 'number', 'Offset de calibración del sensor de humedad en %', 'sensors'),
 ('temperature_offset', '0', 'number', 'Offset de calibración del sensor de temperatura en °C', 'sensors')
 

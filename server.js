@@ -27,6 +27,15 @@ class SilarWebServer {
   // la carga, con la receta ya a medio mandar.
   static MAX_STAGES = 8;
 
+  // Límite de velocidad de una receta, en mm/s, cuando no hay configuración que
+  // leer. Es el mismo valor que siembra la migración 008 en max_transfer_speed
+  // y max_dip_speed, para que una base a medio migrar se comporte igual que una
+  // al día. Lo que la mecánica da de verdad es otra cosa y la sabe el firmware:
+  // MAX_SPEED_Y y MAX_SPEED_Z valen 2000 pasos/s, que con los pasos/mm de cada
+  // eje son unos 26 mm/s en Y y 100 en Z. Pedir más de eso no rompe nada, el
+  // firmware recorta y lo avisa por el puerto serie.
+  static LIMITE_VELOCIDAD_POR_DEFECTO_MMS = 50;
+
   constructor() {
     this.server = null;
     this.io = null;
@@ -1222,6 +1231,89 @@ class SilarWebServer {
     }
   }
 
+  /**
+   * Topes de velocidad vigentes, en mm/s: los que el administrador dejó en
+   * Configuración. Si la consulta falla o el valor guardado no sirve, se cae al
+   * valor por defecto en vez de quedarse sin límite.
+   */
+  async obtenerLimitesVelocidad() {
+    const limites = {
+      transferSpeed: SilarWebServer.LIMITE_VELOCIDAD_POR_DEFECTO_MMS,
+      dipSpeed: SilarWebServer.LIMITE_VELOCIDAD_POR_DEFECTO_MMS
+    };
+
+    try {
+      const [rows] = await this.dbConnection.execute(
+        `SELECT config_key, config_value FROM system_config
+         WHERE config_key IN ('max_transfer_speed', 'max_dip_speed')`
+      );
+
+      rows.forEach((row) => {
+        const valor = parseFloat(row.config_value);
+        if (!(valor > 0)) return;
+        if (row.config_key === 'max_transfer_speed') {
+          limites.transferSpeed = valor;
+        } else if (row.config_key === 'max_dip_speed') {
+          limites.dipSpeed = valor;
+        }
+      });
+    } catch (error) {
+      logger.warn(`No se pudieron leer los límites de velocidad, se usan ${SilarWebServer.LIMITE_VELOCIDAD_POR_DEFECTO_MMS} mm/s: ${error.message}`);
+    }
+
+    return limites;
+  }
+
+  /**
+   * Revisa las tres velocidades de un juego de parámetros contra los topes.
+   * Devuelve el mensaje del primer campo que se pasa, o null si todo cabe.
+   *
+   * Se comprueba aquí y no solo en la pantalla porque estas tres velocidades
+   * son las únicas que llegan al firmware: una receta guardada por encima del
+   * tope mueve la máquina de verdad, y el límite lo puso el administrador por
+   * seguridad.
+   */
+  static errorDeVelocidad(parametros, limites, prefijo = '') {
+    if (!parametros || typeof parametros !== 'object') return null;
+
+    const campos = [
+      ['transferSpeed', 'la velocidad de transferencia Y', limites.transferSpeed],
+      ['dipSpeed', 'la velocidad de inmersión Z', limites.dipSpeed],
+      // Vacío o 0 = subir a la misma velocidad de la bajada, que ya va validada.
+      ['emersionSpeed', 'la velocidad de emersión Z', limites.dipSpeed]
+    ];
+
+    for (const [campo, etiqueta, tope] of campos) {
+      const valor = parseFloat(parametros[campo]) || 0;
+      if (valor > tope) {
+        return `${prefijo}${etiqueta} no puede exceder ${tope} mm/s`;
+      }
+    }
+
+    return null;
+  }
+
+  /**
+   * Aplica los topes de velocidad a la receta entera: el juego de parámetros y,
+   * si es por etapas, cada una de las etapas.
+   */
+  async errorDeVelocidadEnReceta(parameters, etapas) {
+    const limites = await this.obtenerLimitesVelocidad();
+
+    const errorParametros = SilarWebServer.errorDeVelocidad(parameters, limites);
+    if (errorParametros) return errorParametros;
+
+    // extractStages siempre devuelve un arreglo; el `|| []` es por si alguna vez
+    // se llama con una receta sin etapas.
+    const secuencia = etapas || [];
+    for (let i = 0; i < secuencia.length; i++) {
+      const error = SilarWebServer.errorDeVelocidad(secuencia[i], limites, `Etapa ${i + 1}: `);
+      if (error) return error;
+    }
+
+    return null;
+  }
+
   async saveRecipe(req, res) {
     try {
       const { name, description, type } = req.body;
@@ -1236,6 +1328,12 @@ class SilarWebServer {
       // Los parámetros que se guardan en recipe_parameters: los de la receta
       // normal, o el resumen calculado si es por etapas.
       const parameters = esPorEtapas ? this.buildStagedSummary(etapas) : req.body.parameters;
+
+      // Topes de velocidad configurados por el administrador
+      const errorVelocidad = await this.errorDeVelocidadEnReceta(parameters, etapas);
+      if (errorVelocidad) {
+        return res.status(400).json({ success: false, message: errorVelocidad });
+      }
 
       // Validar datos de receta
       const recipeValidation = validator.validateRecipe({ name, description, type });
@@ -1373,6 +1471,12 @@ class SilarWebServer {
       }
 
       const parameters = esPorEtapas ? this.buildStagedSummary(etapas) : req.body.parameters;
+
+      // Topes de velocidad configurados por el administrador
+      const errorVelocidad = await this.errorDeVelocidadEnReceta(parameters, etapas);
+      if (errorVelocidad) {
+        return res.status(400).json({ success: false, message: errorVelocidad });
+      }
 
       // Verificar conexión a la base de datos
       if (!this.dbConnection) {
@@ -2920,6 +3024,25 @@ class SilarWebServer {
         });
       }
 
+      // Un tope en 0 o en negativo dejaría la máquina sin poder guardar ninguna
+      // receta, y un tope vacío se guardaría como NaN. Por arriba no se corrige
+      // nada: si el administrador pide más de lo que el eje da, el firmware
+      // recorta en marcha y lo avisa.
+      const topesConfigurables = {
+        max_transfer_speed: 'la velocidad de transferencia Y',
+        max_dip_speed: 'la velocidad del eje Z'
+      };
+
+      for (const [clave, etiqueta] of Object.entries(topesConfigurables)) {
+        if (config[clave] === undefined) continue;
+        if (!(parseFloat(config[clave]) > 0)) {
+          return res.status(400).json({
+            success: false,
+            message: `El límite de ${etiqueta} tiene que ser mayor que 0 mm/s`
+          });
+        }
+      }
+
       // Verificar conexión a la base de datos
       if (!this.dbConnection) {
         return res.status(503).json({
@@ -3031,7 +3154,7 @@ class SilarWebServer {
       const [rows] = await this.dbConnection.execute(
         `SELECT config_key, config_value, config_type 
          FROM system_config 
-         WHERE config_key IN ('max_velocity_y', 'max_velocity_z', 'max_accel_y', 'max_accel_z', 'humidity_offset', 'temperature_offset')
+         WHERE config_key IN ('max_transfer_speed', 'max_dip_speed', 'humidity_offset', 'temperature_offset')
          ORDER BY config_key`
       );
 

@@ -89,3 +89,32 @@ La velocidad real de cada eje son las tres en mm/s:
 | Velocidad Transferencia Y (mm/s) | Y, el traslado entre vasos |
 | Velocidad Inmersión Z (mm/s) | Z, la bajada |
 | Velocidad Emersión Z (mm/s) | Z, la subida |
+
+## Los topes que pone el administrador
+
+Configuración tenía cuatro límites de seguridad heredados de ese formulario
+viejo: `max_velocity_y`, `max_velocity_z`, `max_accel_y` y `max_accel_z`, en rpm
+y rpm/s. No los leía nadie, así que no protegían de nada. La migración
+`008_limites_velocidad.sql` los cambia por dos, en las mismas unidades que usa
+la receta:
+
+| Clave | Qué limita |
+|---|---|
+| `max_transfer_speed` | Velocidad Transferencia Y (mm/s) |
+| `max_dip_speed` | Velocidad Inmersión Z y Velocidad Emersión Z (mm/s) |
+
+Los dos arrancan en 50 mm/s. La aceleración ya no se configura: la fijan
+`MAX_ACCEL_Y` y `MAX_ACCEL_Z` en el firmware, que es quien sabe lo que aguanta
+la mecánica.
+
+Ese tope se comprueba en los dos lados. En el formulario, para que el operador
+lo vea antes de guardar (atributo `max`, aviso al escribir y revisión de cada
+etapa), y otra vez en `saveRecipe` y `updateRecipe` del servidor, porque una
+pantalla con la configuración vieja en memoria no puede servir para saltárselo.
+Si la configuración no se puede leer se usan 50 mm/s, el mismo valor que siembra
+la migración.
+
+Subir el tope por encima de lo que da el eje no rompe nada, solo deja de servir:
+el eje Y no pasa de unos 26 mm/s y el Z de 100 mm/s, y a partir de ahí el
+firmware recorta solo y lo avisa por el puerto serie. Por eso 50 en Y queda
+por encima de lo alcanzable y en Z deja el eje a media velocidad.

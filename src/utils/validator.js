@@ -16,10 +16,22 @@ class Validator {
       parameters: {
         duration: { required: false, type: 'number', min: 1, max: 999 },
         temperature: { required: false, type: 'number', min: -50, max: 200 },
-        velocityX: { required: false, type: 'number', min: 0, max: 1000 },
-        velocityY: { required: false, type: 'number', min: 0, max: 1000 },
-        accelX: { required: false, type: 'number', min: 0, max: 100 },
-        accelY: { required: false, type: 'number', min: 0, max: 100 },
+        // Las tres velocidades que llegan al firmware, en mm/s. Aquí solo se
+        // comprueba que sean números y que no vengan en negativo: el máximo lo
+        // pone errorDeVelocidadEnReceta en server.js, que es el único sitio que
+        // puede saberlo, porque combina el tope físico del eje con el límite de
+        // seguridad que el administrador guardó en la configuración. Repetir un
+        // tope fijo aquí solo daría dos números que se desincronizan.
+        //
+        // Antes aquí estaban velocityX/velocityY y accelX/accelY, en rpm y
+        // rpm/s. Eran los campos del formulario viejo: la receta ya no los manda
+        // (las columnas siguen en la base, guardadas en 0) y la aceleración no
+        // la decide la receta, la fija el firmware según lo que aguanta la
+        // mecánica. Validarlos no rechazaba nada y dejaba las velocidades de
+        // verdad sin comprobar en el servidor.
+        transferSpeed: { required: false, type: 'number', min: 0 },
+        dipSpeed: { required: false, type: 'number', min: 0 },
+        emersionSpeed: { required: false, type: 'number', min: 0 },
         humidityOffset: { required: false, type: 'number', min: -50, max: 50 },
         temperatureOffset: { required: false, type: 'number', min: -20, max: 20 }
       },

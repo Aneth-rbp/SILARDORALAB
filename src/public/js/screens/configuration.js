@@ -5,6 +5,18 @@
  */
 
 class ConfigurationScreen {
+    // Lo que se muestra si la configuración todavía no tiene los topes: el mismo
+    // valor que siembra la migración 008, para que el formulario no proponga
+    // guardar un número distinto del que ya está vigente.
+    static LIMITE_VELOCIDAD_POR_DEFECTO_MMS = 50;
+
+    // Lo que cada eje da de verdad, en mm/s, según el firmware (MAX_SPEED_Y y
+    // MAX_SPEED_Z, 2000 pasos/s, entre los pasos/mm de cada eje). No se usan
+    // como tope del formulario: se enseñan al administrador para que sepa a
+    // partir de qué número el firmware va a recortar por su cuenta.
+    static VELOCIDAD_MECANICA_Y_MMS = 26;
+    static VELOCIDAD_MECANICA_Z_MMS = 100;
+
     constructor(app) {
         this.app = app;
         this.config = {};
@@ -138,10 +150,8 @@ class ConfigurationScreen {
     updateConfigurationForm() {
         const formFields = {
             'config-report-path': this.config.report_path || '',
-            'config-max-velocity-y': this.config.max_velocity_y || 1000,
-            'config-max-velocity-z': this.config.max_velocity_z || 1000,
-            'config-max-accel-y': this.config.max_accel_y || 100,
-            'config-max-accel-z': this.config.max_accel_z || 100,
+            'config-max-transfer-speed': this.config.max_transfer_speed || ConfigurationScreen.LIMITE_VELOCIDAD_POR_DEFECTO_MMS,
+            'config-max-dip-speed': this.config.max_dip_speed || ConfigurationScreen.LIMITE_VELOCIDAD_POR_DEFECTO_MMS,
             'config-humidity-offset': this.config.humidity_offset || 0,
             'config-temperature-offset': this.config.temperature_offset || 0
         };
@@ -195,12 +205,28 @@ class ConfigurationScreen {
             return;
         }
 
+        const maxTransferSpeed = parseFloat(document.getElementById('config-max-transfer-speed')?.value) || 0;
+        const maxDipSpeed = parseFloat(document.getElementById('config-max-dip-speed')?.value) || 0;
+
+        // Un tope en 0 se rechaza antes de mandarlo: dejaría la máquina sin poder
+        // guardar ninguna receta. Por arriba no se corrige nada; si el número
+        // pasa de lo que el eje da, el firmware recorta en marcha y lo avisa.
+        const topes = [
+            ['transferencia Y', maxTransferSpeed],
+            ['inmersión Z', maxDipSpeed]
+        ];
+
+        for (const [eje, valor] of topes) {
+            if (valor <= 0) {
+                this.app.showError(`La velocidad máxima de ${eje} tiene que ser mayor que 0 mm/s`);
+                return;
+            }
+        }
+
         const configToSave = {
             report_path: document.getElementById('config-report-path')?.value || '',
-            max_velocity_y: parseFloat(document.getElementById('config-max-velocity-y')?.value) || 0,
-            max_velocity_z: parseFloat(document.getElementById('config-max-velocity-z')?.value) || 0,
-            max_accel_y: parseFloat(document.getElementById('config-max-accel-y')?.value) || 0,
-            max_accel_z: parseFloat(document.getElementById('config-max-accel-z')?.value) || 0,
+            max_transfer_speed: maxTransferSpeed,
+            max_dip_speed: maxDipSpeed,
             humidity_offset: parseFloat(document.getElementById('config-humidity-offset')?.value) || 0,
             temperature_offset: parseFloat(document.getElementById('config-temperature-offset')?.value) || 0
         };
@@ -1142,25 +1168,27 @@ class ConfigurationScreen {
 
                                         <hr class="my-4 opacity-10">
 
-                                        <!-- Velocidades y Aceleraciones -->
-                                        <div class="row g-4 mb-4">
-                                            <div class="col-md-3">
-                                                <h6 class="text-primary fw-bold x-small mb-2">Vel. Y (rpm)</h6>
-                                                <input type="number" class="form-control" id="config-max-velocity-y">
+                                        <!-- Límites de velocidad de las recetas -->
+                                        <div class="row g-4 mb-2">
+                                            <div class="col-md-6">
+                                                <h6 class="text-primary fw-bold x-small mb-2">Vel. máx. transferencia Y (mm/s)</h6>
+                                                <input type="number" step="0.1" min="0.1"
+                                                       class="form-control" id="config-max-transfer-speed"
+                                                       title="Máximo que se podrá pedir en una receta para el eje Y">
                                             </div>
-                                            <div class="col-md-3">
-                                                <h6 class="text-primary fw-bold x-small mb-2">Vel. Z (rpm)</h6>
-                                                <input type="number" class="form-control" id="config-max-velocity-z">
-                                            </div>
-                                            <div class="col-md-3">
-                                                <h6 class="text-primary fw-bold x-small mb-2">Accel. Y (rpm/s)</h6>
-                                                <input type="number" class="form-control" id="config-max-accel-y">
-                                            </div>
-                                            <div class="col-md-3">
-                                                <h6 class="text-primary fw-bold x-small mb-2">Accel. Z (rpm/s)</h6>
-                                                <input type="number" class="form-control" id="config-max-accel-z">
+                                            <div class="col-md-6">
+                                                <h6 class="text-primary fw-bold x-small mb-2">Vel. máx. inmersión Z (mm/s)</h6>
+                                                <input type="number" step="0.1" min="0.1"
+                                                       class="form-control" id="config-max-dip-speed"
+                                                       title="Máximo que se podrá pedir en una receta para el eje Z">
                                             </div>
                                         </div>
+                                        <p class="text-muted x-small mb-4">
+                                            Es el máximo que se puede pedir en una receta; la velocidad de emersión usa el mismo límite que la de
+                                            inmersión. Por encima de ${ConfigurationScreen.VELOCIDAD_MECANICA_Y_MMS} mm/s en Y y de
+                                            ${ConfigurationScreen.VELOCIDAD_MECANICA_Z_MMS} mm/s en Z el firmware recorta por su cuenta, porque es lo
+                                            que dan los motores. La aceleración no se configura: la fija el firmware según lo que aguanta la mecánica.
+                                        </p>
 
                                         <hr class="my-4 opacity-10">
 
